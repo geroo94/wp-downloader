@@ -121,6 +121,11 @@ class YtDlpWorker:
         if title and task.task_id in self.manager.tasks:
             await self.manager.update_task(task.task_id, title=title, thumbnail_url=thumbnail_url)
 
+        if task.live_record and task.wait_for_video:
+            await self.manager.update_task(
+                task.task_id,
+                live_status="Czekam na rozpoczęcie streamu…")
+
         if self.manager.is_cancel_requested(task.task_id):
             await self._finish_cancelled(task.task_id)
             return
@@ -381,6 +386,10 @@ class YtDlpWorker:
         if task.live_record:
             opts["live_from_start"] = True
             opts["no_part"] = True
+            if task.wait_for_video:
+                # Poll the URL until the scheduled stream goes live; same shape
+                # as yt-dlp's "--wait-for-video 10" CLI flag (min, max) in s.
+                opts["wait_for_video"] = (10, None)
 
         fid = (task.format_id or "").lower()
         res_match = re.search(r"(\d+)p", fid)

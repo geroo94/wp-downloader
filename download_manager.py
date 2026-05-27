@@ -17,6 +17,7 @@ class DownloadTask:
     filepath: str = ""
     output_path: str = ""
     live_record: bool = False
+    wait_for_video: bool = False  # --wait-for-video for scheduled YT streams
     thumbnail_url: str = ""
     downloaded_size: str = ""
     live_status: str = ""
@@ -96,7 +97,7 @@ class DownloadManager:
         self.tasks = new_tasks
         await self.broadcast({"type": "reorder_success"})
 
-    def add_task(self, url: str, format_id: str, quality: str, output_path: str = "", live_record: bool = False, cookies_browser: str = "") -> str:
+    def add_task(self, url: str, format_id: str, quality: str, output_path: str = "", live_record: bool = False, cookies_browser: str = "", wait_for_video: bool = False) -> str:
         task_id = str(uuid.uuid4())[:8]
         task = DownloadTask(
             task_id=task_id,
@@ -106,6 +107,7 @@ class DownloadManager:
             output_path=(output_path or "").strip(),
             live_record=live_record,
             cookies_browser=cookies_browser,
+            wait_for_video=wait_for_video,
         )
         self.tasks[task_id] = task
         if self._worker:

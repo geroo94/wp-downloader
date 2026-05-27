@@ -152,6 +152,44 @@
     }
     .toggle-sw input:checked ~ .toggle-track .toggle-thumb { transform: translateX(18px); }
 
+    /* "Czekaj na rozpoczęcie streamu" toggle — X / ✓ icons on the track, slides right when ON */
+    .wait-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; margin-bottom: 12px; padding: 10px 12px;
+      background: var(--surf-subtle); border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .wait-label { font-size: 12.5px; font-weight: 600; color: var(--text-1); letter-spacing: -0.01em; cursor: pointer; }
+    .wait-hint  { font-weight: 400; color: var(--text-3); font-size: 11.5px; margin-left: 4px; }
+    .toggle-wait { display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0; }
+    .toggle-wait input { display: none; }
+    .t-track {
+      position: relative; display: inline-block;
+      width: 52px; height: 26px; border-radius: 99px;
+      background: var(--surf-track); border: 1px solid var(--border);
+      transition: background 0.22s var(--ease-spring), border-color 0.22s;
+    }
+    .toggle-wait input:checked ~ .t-track {
+      background: #22c55e; border-color: #16a34a;
+    }
+    .t-x, .t-check {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      font-size: 11px; font-weight: 700; line-height: 1; pointer-events: none;
+      transition: opacity 0.18s;
+    }
+    .t-x     { right: 7px; color: var(--text-3); opacity: 1; }
+    .t-check { left: 7px;  color: #fff;         opacity: 0; }
+    .toggle-wait input:checked ~ .t-track .t-x     { opacity: 0; }
+    .toggle-wait input:checked ~ .t-track .t-check { opacity: 1; }
+    .t-thumb {
+      position: absolute; top: 2px; left: 2px;
+      width: 20px; height: 20px; border-radius: 50%; background: #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+      transition: transform 0.25s var(--ease-spring);
+    }
+    .toggle-wait input:checked ~ .t-track .t-thumb { transform: translateX(26px); }
+    [data-theme="dark"] .wait-row { background: var(--surf-muted); }
+
     body {
       font-family: 'Inter', system-ui, sans-serif;
       background: var(--bg);
@@ -701,6 +739,20 @@
         <input type="text" id="stream-url-input" placeholder="Link do transmisji na żywo...">
         <button class="btn-secondary" onclick="fetchStreamFormats()">Sprawdź formaty</button>
       </div>
+      <div class="wait-row">
+        <label for="wait-toggle-cb" class="wait-label">
+          Czekaj na rozpoczęcie streamu
+          <span class="wait-hint">— włącz, jeśli wrzucasz link do transmisji która jeszcze nie wystartowała</span>
+        </label>
+        <label class="toggle-wait" id="wait-toggle" title="Czekaj aż transmisja ruszy">
+          <input type="checkbox" id="wait-toggle-cb" hidden>
+          <span class="t-track">
+            <span class="t-x" aria-hidden="true">✕</span>
+            <span class="t-check" aria-hidden="true">✓</span>
+            <span class="t-thumb"></span>
+          </span>
+        </label>
+      </div>
       <div class="opts-row">
         <select id="stream-fmt-select">
           <optgroup label="— Formaty wewnętrzne —">
@@ -1156,6 +1208,7 @@
       ? (document.getElementById('stream-fmt-select').value || 'best')
       : (document.getElementById('fmt-select').value || 'mp4-720');
     const live_record = isStream;
+    const wait_for_video = isStream && !!document.getElementById('wait-toggle-cb')?.checked;
 
     if (!url) { shakeInput(); return; }
 
@@ -1183,8 +1236,8 @@
       showToast('Dodawanie do kolejki...');
 
       try {
-        await executeDownload(url, format_id, output_path, live_record, urlInput);
-        showToast('Zadanie zaakceptowane!');
+        await executeDownload(url, format_id, output_path, live_record, urlInput, wait_for_video);
+        showToast(wait_for_video ? 'Czekam na rozpoczęcie streamu…' : 'Zadanie zaakceptowane!');
       } catch (err) {
         showToast('Błąd: ' + err.message, true);
       } finally {
@@ -1193,12 +1246,12 @@
     });
   }
 
-  async function executeDownload(url, format_id, output_path, live_record, urlInput) {
+  async function executeDownload(url, format_id, output_path, live_record, urlInput, wait_for_video = false) {
     try {
       const res = await fetch('/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, format_id, output_path, live_record, cookies_browser: localStorage.getItem('wp-cookies-browser') || '' })
+        body: JSON.stringify({ url, format_id, output_path, live_record, wait_for_video, cookies_browser: localStorage.getItem('wp-cookies-browser') || '' })
       });
 
       const data = await res.json();

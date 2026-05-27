@@ -46,6 +46,7 @@ class DownloadRequest(BaseModel):
     output_path: str = ""
     live_record: bool = False
     cookies_browser: str = ""  # "chrome" / "firefox" / "safari" / "edge" / ""
+    wait_for_video: bool = False  # --wait-for-video for scheduled live streams
     # Nowe pola inspirowane OBS
     add_watermark: bool = False
     audio_only_separate: bool = False  # Czy pobrać audio jako osobny plik (multi-track)
@@ -545,6 +546,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 output_path=req.output_path,
                 live_record=req.live_record,
                 cookies_browser=req.cookies_browser,
+                wait_for_video=req.wait_for_video,
             )
         except Exception as exc:
             logger.exception("Błąd tworzenia zadania pobierania: %s", exc)
