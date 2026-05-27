@@ -155,7 +155,7 @@
     /* "Czekaj na rozpoczęcie streamu" toggle — X / ✓ icons on the track, slides right when ON */
     .wait-row {
       display: flex; align-items: center; justify-content: space-between;
-      gap: 12px; margin-bottom: 12px; padding: 10px 12px;
+      gap: 12px; margin-top: 12px; padding: 10px 12px;
       background: var(--surf-subtle); border: 1px solid var(--border);
       border-radius: 8px;
     }
@@ -739,20 +739,6 @@
         <input type="text" id="stream-url-input" placeholder="Link do transmisji na żywo...">
         <button class="btn-secondary" onclick="fetchStreamFormats()">Sprawdź formaty</button>
       </div>
-      <div class="wait-row">
-        <label for="wait-toggle-cb" class="wait-label">
-          Czekaj na rozpoczęcie streamu
-          <span class="wait-hint">— włącz, jeśli wrzucasz link do transmisji która jeszcze nie wystartowała</span>
-        </label>
-        <label class="toggle-wait" id="wait-toggle" title="Czekaj aż transmisja ruszy">
-          <input type="checkbox" id="wait-toggle-cb" hidden>
-          <span class="t-track">
-            <span class="t-x" aria-hidden="true">✕</span>
-            <span class="t-check" aria-hidden="true">✓</span>
-            <span class="t-thumb"></span>
-          </span>
-        </label>
-      </div>
       <div class="opts-row">
         <select id="stream-fmt-select">
           <optgroup label="— Formaty wewnętrzne —">
@@ -766,6 +752,20 @@
           </svg>
           Nagrywaj
         </button>
+      </div>
+      <div class="wait-row">
+        <label for="wait-toggle-cb" class="wait-label">
+          Czekaj na rozpoczęcie streamu
+          <span class="wait-hint">— włącz, jeśli wrzucasz link do transmisji która jeszcze nie wystartowała</span>
+        </label>
+        <label class="toggle-wait" id="wait-toggle" title="Czekaj aż transmisja ruszy">
+          <input type="checkbox" id="wait-toggle-cb" hidden>
+          <span class="t-track">
+            <span class="t-x" aria-hidden="true">✕</span>
+            <span class="t-check" aria-hidden="true">✓</span>
+            <span class="t-thumb"></span>
+          </span>
+        </label>
       </div>
     </div>
   </div>
@@ -1149,6 +1149,47 @@
     await _loadFormatsInto(url, 'stream-fmt-select', true);
   }
 
+  // Bucket an external format object {id,label,height,ext,fps,is_audio_only,is_video_only}
+  // into the resolution tier its height belongs to.
+  function _tierFor(f) {
+    if (f.is_audio_only) return { key: 'audio', label: '— Tylko audio —', order: 99 };
+    const h = f.height || 0;
+    if (h >= 2160) return { key: '2160', label: '— 4K (2160p) —',      order: 1 };
+    if (h >= 1440) return { key: '1440', label: '— 1440p (QHD) —',     order: 2 };
+    if (h >= 1080) return { key: '1080', label: '— 1080p (Full HD) —', order: 3 };
+    if (h >=  720) return { key:  '720', label: '— 720p (HD) —',        order: 4 };
+    if (h >=  480) return { key:  '480', label: '— 480p (SD) —',        order: 5 };
+    if (h >=  360) return { key:  '360', label: '— 360p —',             order: 6 };
+    if (h >=  240) return { key:  '240', label: '— 240p —',             order: 7 };
+    if (h >    0)  return { key:  'low', label: '— Niska jakość —',     order: 8 };
+    return            { key: 'other', label: '— Pozostałe —',           order: 9 };
+  }
+  // Build <optgroup> blocks matching the internal-format dropdown style:
+  // — 4K (2160p) — / — 1440p (QHD) — / — 1080p (Full HD) — / 720p / 480p / 360p / 240p / Tylko audio
+  function renderGroupedExternal(external) {
+    const buckets = new Map();
+    for (const f of external) {
+      const t = _tierFor(f);
+      if (!buckets.has(t.key)) buckets.set(t.key, { ...t, items: [] });
+      buckets.get(t.key).items.push(f);
+    }
+    const ordered = Array.from(buckets.values()).sort((a, b) => a.order - b.order);
+    let html = '';
+    for (const b of ordered) {
+      // Inside each tier, sort: mp4 first, then mov, mkv, webm, rest; higher fps wins ties.
+      const extRank = e => ({ mp4: 0, mov: 1, mkv: 2, webm: 3, m4a: 0, mp3: 1 }[e] ?? 9);
+      b.items.sort((a, b2) =>
+        extRank(a.ext) - extRank(b2.ext) || (b2.fps || 0) - (a.fps || 0)
+      );
+      html += `<optgroup label="${escHtml(b.label)}">`;
+      for (const f of b.items) {
+        html += `<option value="${escHtml(f.id)}">${escHtml(f.label)}</option>`;
+      }
+      html += '</optgroup>';
+    }
+    return html;
+  }
+
   async function _loadFormatsInto(url, selectId, isStream) {
     const select = document.getElementById(selectId);
     select.innerHTML = '<option>Ładowanie…</option>';
@@ -1180,11 +1221,7 @@
       const data = await res.json();
       const external = (data.formats || []).filter(f => !internalIds.has(f.id));
       if (external.length > 0) {
-        html += `<optgroup label="— Formaty zewnętrzne —">`;
-        html += external.map(f =>
-          `<option value="${escHtml(f.id)}">${escHtml(f.label)}</option>`
-        ).join('');
-        html += '</optgroup>';
+        html += renderGroupedExternal(external);
         showToast(`Załadowano ${external.length} formatów`);
       } else if (data.error) {
         // External formats unavailable — inform but don't block download

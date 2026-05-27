@@ -640,14 +640,17 @@ def create_app(manager: DownloadManager) -> FastAPI:
             formats = []
             for f in info.get("formats", []):
                 format_id = f.get("format_id")
-                ext = f.get("ext")
+                ext = (f.get("ext") or "").lower()
                 resolution = f.get("resolution")
                 height = f.get("height")
                 fps = f.get("fps")
-                vcodec = f.get("vcodec")
-                acodec = f.get("acodec")
+                vcodec = (f.get("vcodec") or "").lower()
+                acodec = (f.get("acodec") or "").lower()
                 note = f.get("format_note")
                 filesize_approx = f.get("filesize_approx")
+
+                is_audio_only = (not vcodec or vcodec == "none") and acodec and acodec != "none"
+                is_video_only = vcodec and vcodec != "none" and (not acodec or acodec == "none")
 
                 label_parts = []
                 if resolution and resolution != "unknown": label_parts.append(resolution)
@@ -659,8 +662,18 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 if note: label_parts.append(f"({note})")
                 if filesize_approx: label_parts.append(f"~{filesize_approx / (1024 * 1024):.1f}MB")
 
-                if label_parts:
-                    formats.append({"id": format_id, "label": " · ".join(label_parts)})
+                if not label_parts:
+                    continue
+
+                formats.append({
+                    "id": format_id,
+                    "label": " · ".join(label_parts),
+                    "height": int(height) if height else None,
+                    "ext": ext,
+                    "fps": int(fps) if fps else None,
+                    "is_audio_only": bool(is_audio_only),
+                    "is_video_only": bool(is_video_only),
+                })
 
             def sort_formats(f):
                 label = f["label"].lower()
