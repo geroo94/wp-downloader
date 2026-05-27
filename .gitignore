@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+ENV/
+
+# Pliki wykonywalne i binarne (nie wrzucamy ich na GitHub)
+dist/
+build/
+*.exe
+*.zip
+ffmpeg.exe
+ffprobe.exe
+
+# Logi i konfiguracje
+*.log
+settings.json
+
+# Dokumentacja generowana
+DOKUMENTACJA.html
+DOKUMENTACJA.pdf
+
+# macOS
+.DS_Store
+
+# PyInstaller spec (generated automatically)
+*.spec

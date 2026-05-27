@@ -1,0 +1,2005 @@
+<!DOCTYPE html>
+<html lang="pl" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WP Downloader</title>
+  <script>
+    // Set theme before CSS renders to avoid flash
+    (function(){var t=localStorage.getItem('wp-theme')||'light';
+    if(t==='auto')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
+    document.documentElement.setAttribute('data-theme',t);})();
+  </script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="/static/qwebchannel.js"></script>
+  <script src="/static/anime.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #FBFBFA;
+      --surface:      #FFFFFF;
+      --border:       #EAEAEA;
+      --text-1:       #111111;
+      --text-2:       #787774;
+      --text-3:       #ADADAA;
+      --red:          #E3000F;
+      --red-dim:      #991B1B;
+      --surf-hover:   #FAFAFA;
+      --surf-subtle:  #F9F9F8;
+      --surf-muted:   #F5F5F3;
+      --surf-track:   #F0F0EC;
+      --task-border:  #F0F0EC;
+      --ease-spring:  cubic-bezier(0.32, 0.72, 0, 1);
+    }
+
+    [data-theme="dark"] {
+      --bg:           #0F0F0F;
+      --surface:      #1A1A1A;
+      --border:       #2A2A2A;
+      --text-1:       #EBEBEB;
+      --text-2:       #888880;
+      --text-3:       #555550;
+      --red:          #FF2233;
+      --red-dim:      #FF8090;
+      --surf-hover:   #1F1F1F;
+      --surf-subtle:  #1D1D1D;
+      --surf-muted:   #222222;
+      --surf-track:   #2A2A2A;
+      --task-border:  #252525;
+    }
+    [data-theme="dark"] .seg-btn.active {
+      background: #383838;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3);
+    }
+    [data-theme="dark"] .badge.downloading { background: #2D1515; color: #FF8090; }
+    [data-theme="dark"] .badge.done        { background: #0F2D1A; color: #4ade80; }
+    [data-theme="dark"] .badge.error       { background: #2D1A0F; color: #fb923c; }
+    [data-theme="dark"] .badge.merging     { background: #2D2510; color: #fbbf24; }
+    [data-theme="dark"] .task-actions .warning { background: #2D2510; border-color: #4D3A15; color: #fbbf24; }
+    [data-theme="dark"] .merge-track       { background: #2D2510; }
+    [data-theme="dark"] .url-row input     { background: var(--surf-subtle); }
+    [data-theme="dark"] select             { background: var(--surf-subtle); }
+    /* Update button in dark mode: bg=text-1 is near-white → invert to red for contrast */
+    [data-theme="dark"] .btn-update-all    { background: var(--red); color: #fff; }
+    [data-theme="dark"] .btn-header-update { color: var(--text-1); }
+    /* Toast in dark mode: bg=text-1 collapses to near-white → switch to dark surface */
+    [data-theme="dark"] .toast             { background: #2A2A2A; color: #F0F0F0; border: 1px solid #3A3A3A; box-shadow: 0 6px 24px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.3); }
+    [data-theme="dark"] .toast.error       { background: var(--red); color: #fff; border-color: transparent; }
+
+    /* ── Settings ────────────────────────────────────── */
+    .setting-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--border);
+    }
+    .setting-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .setting-row:first-child { padding-top: 0; }
+    .setting-meta { flex: 1; min-width: 0; }
+    .setting-name { font-size: 13px; font-weight: 600; color: var(--text-1); letter-spacing: -0.01em; margin-bottom: 2px; }
+    .setting-desc { font-size: 11.5px; color: var(--text-2); line-height: 1.5; margin-top: 2px; }
+
+    /* ── Font weight overrides ──────────────────────────── */
+    [data-weight="thin"] .task-title,
+    [data-weight="thin"] .section-label,
+    [data-weight="thin"] .setting-name,
+    [data-weight="thin"] .nm { font-weight: 500; }
+    [data-weight="thin"] .task-meta,
+    [data-weight="thin"] .setting-desc,
+    [data-weight="thin"] .badge,
+    [data-weight="thin"] .console-line { font-weight: 300; }
+
+    [data-weight="bold"] .task-title,
+    [data-weight="bold"] .section-label,
+    [data-weight="bold"] .setting-name,
+    [data-weight="bold"] .nm { font-weight: 800; }
+    [data-weight="bold"] .task-meta,
+    [data-weight="bold"] .setting-desc,
+    [data-weight="bold"] .badge,
+    [data-weight="bold"] .console-line { font-weight: 600; }
+
+    /* ── About card ─────────────────────────────────────── */
+    .about-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px;
+    }
+    .about-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 7px 0; border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .about-row:nth-last-child(-n+2) { border-bottom: none; }
+    .about-lbl { color: var(--text-2); font-weight: 500; }
+    .about-val { color: var(--text-1); font-weight: 700; font-variant-numeric: tabular-nums; }
+    .about-val.ok  { color: #16A34A; }
+    .about-val.old { color: #D97706; }
+    .about-val.bad { color: var(--red); }
+    .about-links { display: flex; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .btn-about-link {
+      height: 28px; padding: 0 13px; border: 1px solid var(--border); border-radius: 7px;
+      background: var(--surface); color: var(--text-1); font-size: 12px;
+      font-family: inherit; font-weight: 600; cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-about-link:hover { background: var(--surf-hover); border-color: var(--text-3); }
+
+    .seg-ctrl {
+      display: flex; background: var(--surf-muted); border: 1px solid var(--border);
+      border-radius: 8px; padding: 3px; gap: 2px; flex-shrink: 0;
+    }
+    .seg-btn {
+      height: 26px; padding: 0 13px; border: none; border-radius: 5px;
+      background: none; font-size: 12px; font-family: inherit; font-weight: 600;
+      color: var(--text-2); cursor: pointer; white-space: nowrap;
+      transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+    }
+    .seg-btn.active {
+      background: var(--surface); color: var(--text-1);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .seg-btn:hover:not(.active) { color: var(--text-1); }
+
+    .toggle-sw { display: flex; align-items: center; cursor: pointer; flex-shrink: 0; }
+    .toggle-sw input { display: none; }
+    .toggle-track {
+      width: 40px; height: 22px; background: var(--border); border-radius: 99px;
+      position: relative; transition: background 0.2s; display: block;
+    }
+    .toggle-sw input:checked ~ .toggle-track { background: var(--red); }
+    .toggle-thumb {
+      position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+      background: white; border-radius: 50%;
+      transition: transform 0.2s var(--ease-spring);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+    }
+    .toggle-sw input:checked ~ .toggle-track .toggle-thumb { transform: translateX(18px); }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text-1);
+      min-height: 100vh;
+      padding-bottom: 38px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Console ─────────────────────────────────────── */
+    .console-container {
+      background: #111111;
+      color: #4ade80;
+      font-family: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+      font-size: 11.5px;
+      padding: 16px;
+      height: 300px;
+      overflow-y: auto;
+      border-radius: 10px;
+      border: 1px solid #1e1e1e;
+      line-height: 1.6;
+    }
+    .console-line { margin-bottom: 2px; border-bottom: 1px solid #1a1a1a; padding-bottom: 2px; }
+    .console-line .ts { color: #555; margin-right: 8px; font-size: 10.5px; }
+
+    /* ── Tabs ────────────────────────────────────────── */
+    .tabs-nav {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      padding: 0 2px;
+    }
+    .tab-btn {
+      padding: 9px 16px;
+      border: none;
+      background: none;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      color: var(--text-2);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+      letter-spacing: -0.01em;
+    }
+    .tab-btn.active { color: var(--red); border-bottom-color: var(--red); }
+    .tab-btn:hover:not(.active) { color: var(--text-1); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ── Header ──────────────────────────────────────── */
+    .header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 28px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-left h1 {
+      font-size: 17px;
+      font-weight: 800;
+      color: var(--text-1);
+      letter-spacing: -0.04em;
+      line-height: 1.1;
+    }
+    .header-left span {
+      font-size: 10.5px;
+      font-weight: 500;
+      color: var(--text-3);
+      display: block;
+      margin-top: 1px;
+      letter-spacing: 0.02em;
+    }
+    .header-right { display: flex; align-items: center; gap: 10px; }
+    .btn-header-update {
+      height: 30px;
+      padding: 0 13px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      font-size: 11.5px;
+      font-family: inherit;
+      font-weight: 600;
+      color: var(--text-2);
+      cursor: pointer;
+      white-space: nowrap;
+      letter-spacing: -0.01em;
+      transition: background 0.15s, border-color 0.15s, transform 0.1s var(--ease-spring);
+    }
+    .btn-header-update:hover { background: var(--bg); border-color: #D0D0CC; color: var(--text-1); }
+    .btn-header-update:active { transform: scale(0.96); }
+    .btn-header-update:disabled { opacity: 0.45; cursor: not-allowed; }
+    .header-logo { height: 30px; width: auto; display: block; opacity: 0.92; }
+
+    /* ── Main ────────────────────────────────────────── */
+    .main { max-width: 820px; margin: 0 auto; padding: 22px 20px; }
+
+    /* ── Card ────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 14px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.04);
+      transition: box-shadow 0.2s ease;
+    }
+    [data-theme="dark"] .card {
+      box-shadow: 0 1px 4px rgba(0,0,0,0.25), 0 4px 20px rgba(0,0,0,0.2);
+    }
+
+    /* ── Download form ───────────────────────────────── */
+    .url-row { display: flex; gap: 8px; margin-bottom: 10px; }
+    .url-row input {
+      flex: 1;
+      height: 40px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 14px;
+      font-size: 13.5px;
+      font-family: inherit;
+      font-weight: 400;
+      background: var(--surf-subtle);
+      color: var(--text-1);
+      letter-spacing: -0.01em;
+      transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+    }
+    .url-row input:focus {
+      outline: none;
+      border-color: var(--red);
+      background: var(--surface);
+      box-shadow: 0 0 0 3px rgba(227,0,15,0.07);
+    }
+    .url-row input.error { border-color: var(--red); background: #FFF5F5; }
+    .url-row input::placeholder { color: var(--text-3); }
+
+    .btn-secondary {
+      height: 40px;
+      padding: 0 16px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      font-size: 13px;
+      font-family: inherit;
+      font-weight: 600;
+      color: var(--text-2);
+      cursor: pointer;
+      white-space: nowrap;
+      letter-spacing: -0.01em;
+      transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s var(--ease-spring);
+    }
+    .btn-secondary:hover { background: var(--surf-muted); border-color: #D0D0CC; color: var(--text-1); }
+    .btn-secondary:active { transform: scale(0.97); }
+
+    .opts-row { display: flex; gap: 10px; align-items: center; }
+    select {
+      height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 10px;
+      font-size: 13px;
+      font-family: inherit;
+      background: var(--surf-subtle);
+      color: var(--text-1);
+      flex: 1;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    select:focus { outline: none; border-color: var(--red); }
+
+    .btn-primary {
+      height: 40px;
+      padding: 0 22px;
+      border: none;
+      border-radius: 8px;
+      background: var(--red);
+      color: #fff;
+      font-size: 13.5px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+      letter-spacing: -0.01em;
+      transition: opacity 0.15s, transform 0.1s var(--ease-spring);
+    }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-primary:active { transform: scale(0.97); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Section label ───────────────────────────────── */
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      margin-bottom: 14px;
+    }
+
+    /* ── Task ────────────────────────────────────────── */
+    .task {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 4px;
+      border-bottom: 1px solid var(--task-border);
+      border-radius: 6px;
+      transition: background 0.12s ease;
+    }
+    .task.dragging { opacity: 0.4; background: var(--surf-subtle); }
+    .task:hover { background: var(--surf-hover); }
+    .task:last-child { border-bottom: none; }
+
+    .task-thumb {
+      width: 48px;
+      height: 34px;
+      border-radius: 6px;
+      background: var(--surf-muted);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .task-thumb img { width: 48px; height: 34px; object-fit: cover; border-radius: 6px; display: block; }
+    .task-thumb svg { width: 16px; height: 16px; stroke: #C8C8C4; fill: none; stroke-width: 1.5; stroke-linecap: round; }
+
+    .task-info { flex: 1; min-width: 0; }
+    .task-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-1);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 2px;
+      letter-spacing: -0.01em;
+    }
+    .task-meta { font-size: 11px; color: var(--text-3); margin-bottom: 5px; }
+
+    /* Progress bar */
+    .progress-wrap { height: 3px; background: var(--surf-track); border-radius: 99px; overflow: hidden; margin-bottom: 3px; }
+    .progress-bar {
+      height: 3px; border-radius: 99px; width: 0%;
+    }
+    .progress-bar.downloading { background: var(--red); }
+    .progress-bar.done        { background: #22c55e; }
+    .progress-bar.error       { background: #f97316; }
+    .progress-bar.cancelled   { background: #D1D5DB; }
+
+    /* Speed / ETA text under progress bar */
+    .dl-speed {
+      font-size: 10px; color: var(--text-3); font-weight: 500;
+      font-variant-numeric: tabular-nums; letter-spacing: 0.01em;
+      min-height: 13px;
+    }
+
+    /* Badges */
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 99px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .badge.queue       { background: var(--surf-muted); color: var(--text-2); }
+    .badge.downloading { background: #FEF0F0; color: var(--red-dim); }
+    .badge.done        { background: #F0FDF4; color: #166534; }
+    .badge.error       { background: #FFF4ED; color: #9A3412; }
+    .badge.cancelled   { background: var(--surf-muted); color: var(--text-2); }
+    .badge.merging     { background: #FFFBEB; color: #92400E; }
+
+    /* Empty state */
+    .empty {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 44px 32px;
+      color: var(--text-3);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+    }
+    .empty-icon { width: 32px; height: 32px; opacity: 0.3; margin-bottom: 10px; display: block; }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(70px);
+      background: var(--text-1);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      transition: transform 0.25s var(--ease-spring);
+      z-index: 9998;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.13), 0 1px 4px rgba(0,0,0,0.06);
+      pointer-events: none;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+    .toast.error { background: var(--red); }
+
+    /* System footer */
+    .sys-footer {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      font-size: 10.5px;
+      padding: 5px 18px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      color: var(--text-2);
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+    .footer-left { display: flex; align-items: center; }
+    .btn-update-all {
+      background: var(--text-1);
+      color: #fff;
+      border: none;
+      padding: 3px 10px;
+      border-radius: 5px;
+      font-size: 10px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: opacity 0.15s, transform 0.1s var(--ease-spring);
+    }
+    .btn-update-all:hover { opacity: 0.75; }
+    .btn-update-all:active { transform: scale(0.95); }
+    .btn-update-all:disabled { opacity: 0.35; cursor: wait; }
+    .sys-footer .sep { color: var(--border); margin: 0 7px; }
+    .status-ok  { color: #16a34a !important; font-weight: 700; }
+    .status-old { color: var(--red) !important; font-weight: 700; }
+
+    .drop-active { outline: 2px dashed var(--red); outline-offset: 3px; border-radius: 12px; }
+
+    /* Task actions */
+    .task-actions { display: flex; flex-direction: row; align-items: center; gap: 5px; flex-shrink: 0; }
+    .task-actions button {
+      font-size: 10px;
+      height: 27px;
+      padding: 0 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 600;
+      white-space: nowrap;
+      color: var(--text-2);
+      letter-spacing: -0.01em;
+      transition: background 0.12s, border-color 0.12s, transform 0.1s var(--ease-spring);
+    }
+    .task-actions button:hover { background: var(--surf-muted); color: var(--text-1); }
+    .task-actions button:active { transform: scale(0.95); }
+    .task-actions .danger  { border-color: #FEE2E2; color: #991B1B; }
+    .task-actions .danger:hover { background: #FFF5F5; }
+    .task-actions .warning { border-color: #FDE68A; color: #92400E; background: #FFFBEB; }
+    .task-actions .warning:hover { background: #FEF3C7; }
+
+    .drag-handle { cursor: grab; color: #DDDDD9; padding: 0 4px; font-size: 12px; transition: color 0.15s; }
+    .task:hover .drag-handle { color: #ADADAA; }
+
+    /* Live timer */
+    .live-timer { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 4px; }
+    .live-timer .timer-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--red);
+      animation: pulse 1.4s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.35; transform: scale(0.8); }
+    }
+    .live-timer .timer-value { font-weight: 700; color: var(--red-dim); font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+    .live-timer .timer-size  { color: var(--text-2); font-weight: 400; }
+
+    /* Merge bar */
+    .merge-bar { margin-top: 5px; }
+    .merge-track { position: relative; height: 3px; background: #FEF3C7; border-radius: 99px; overflow: hidden; }
+    .merge-track-inner { position: absolute; height: 100%; width: 35%; background: #F59E0B; border-radius: 99px; animation: merge-slide 1.4s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes merge-slide { 0% { left: -35%; } 100% { left: 100%; } }
+    .merge-label { font-size: 11px; color: #92400E; margin-top: 3px; font-weight: 600; }
+
+    /* Icon buttons */
+    .btn-icon {
+      width: 27px; height: 27px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text-2);
+      padding: 0; flex-shrink: 0;
+      transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.1s var(--ease-spring);
+    }
+    .btn-icon:hover { background: var(--surf-muted); color: var(--text-1); }
+    .btn-icon:active { transform: scale(0.92); }
+    .btn-icon.green  { border-color: #D1FAE5; color: #166534; }
+    .btn-icon.green:hover  { background: #F0FDF4; border-color: #A7F3D0; }
+    .btn-icon.blue   { border-color: #DBEAFE; color: #1D4ED8; }
+    .btn-icon.blue:hover   { background: #EFF6FF; border-color: #BFDBFE; }
+    .btn-icon.purple { border-color: #EDE9FE; color: #6D28D9; }
+    .btn-icon.purple:hover { background: #F5F3FF; border-color: #DDD6FE; }
+    .btn-icon.red    { border-color: #FEE2E2; color: #991B1B; }
+    .btn-icon.red:hover    { background: #FFF5F5; border-color: #FECACA; }
+    .btn-icon:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+    /* Loading screen */
+    #loading-screen {
+      position: fixed; inset: 0;
+      background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 9999;
+      transition: opacity 0.35s ease;
+    }
+    #loading-screen.fade-out { opacity: 0; pointer-events: none; }
+    .loading-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+    .loading-app-name { font-size: 17px; font-weight: 800; color: var(--text-1); letter-spacing: -0.04em; margin-top: 8px; }
+    .loading-status   { font-size: 12px; color: var(--text-2); font-weight: 500; }
+    .loading-bar-track { width: 160px; height: 2px; background: var(--border); border-radius: 99px; overflow: hidden; margin-top: 10px; }
+    .loading-bar-fill  { height: 100%; width: 45%; background: var(--red); border-radius: 99px; animation: loading-sweep 1.1s cubic-bezier(0.4,0,0.2,1) infinite; }
+    @keyframes loading-sweep { 0% { transform: translateX(-200%); } 100% { transform: translateX(320%); } }
+  </style>
+</head>
+<body>
+
+<div id="loading-screen" aria-hidden="true">
+  <div class="loading-inner">
+    <img src="/static/wp_logo.png" alt="WP" height="52" onerror="this.style.display='none'">
+    <div class="loading-app-name">WP Downloader</div>
+    <div class="loading-status">Uruchamianie…</div>
+    <div class="loading-bar-track"><div class="loading-bar-fill"></div></div>
+  </div>
+</div>
+
+<!-- ── Nagłówek ──────────────────────────────────────── -->
+<header class="header">
+  <div class="header-left">
+    <h1>WP Downloader</h1>
+    <span>v 1.0</span>
+  </div>
+  <div class="header-right">
+    <button type="button" class="btn-header-update" id="btn-github-update" onclick="updateFromGitHub()">
+      Aktualizuj z GitHub
+    </button>
+    <img class="header-logo" src="/static/wp_logo.png" alt="WP">
+  </div>
+</header>
+
+<!-- ── Główna zawartość ─────────────────────────────── -->
+<main class="main">
+
+  <nav class="tabs-nav">
+    <button class="tab-btn active" onclick="switchTab('downloader')">Pobieranie</button>
+    <button class="tab-btn" onclick="switchTab('streams')">Live Streamy</button>
+    <button class="tab-btn" onclick="switchTab('settings')">Ustawienia</button>
+    <button class="tab-btn" onclick="switchTab('console-tab')">Konsola</button>
+  </nav>
+
+  <div id="downloader" class="tab-content active">
+    <!-- Karta formularza standardowego -->
+    <div class="card" id="drop-card">
+      <div class="url-row">
+        <input type="text" id="url-input" placeholder="Wklej link do wideo (YouTube, Facebook, Twitter…)">
+        <button class="btn-secondary" onclick="fetchFormats()">Sprawdź formaty</button>
+      </div>
+      <div class="opts-row">
+        <select id="fmt-select">
+          <optgroup label="— Najwyższa jakość —">
+            <option value="best-mp4">Najlepsze · MP4</option>
+            <option value="best-mkv">Najlepsze · MKV</option>
+            <option value="best-mov">Najlepsze · MOV</option>
+          </optgroup>
+          <optgroup label="— 4K (2160p) —">
+            <option value="2160-mp4">4K · MP4</option>
+            <option value="2160-mkv">4K · MKV</option>
+            <option value="2160-mov">4K · MOV</option>
+          </optgroup>
+          <optgroup label="— 1440p (QHD) —">
+            <option value="1440-mp4">1440p · MP4</option>
+            <option value="1440-mkv">1440p · MKV</option>
+            <option value="1440-mov">1440p · MOV</option>
+          </optgroup>
+          <optgroup label="— 1080p (Full HD) —">
+            <option value="1080-mp4">1080p · MP4</option>
+            <option value="1080-mkv">1080p · MKV</option>
+            <option value="1080-mov">1080p · MOV</option>
+          </optgroup>
+          <optgroup label="— 720p (HD) —">
+            <option value="720-mp4">720p · MP4</option>
+            <option value="720-mkv">720p · MKV</option>
+            <option value="720-mov">720p · MOV</option>
+          </optgroup>
+          <optgroup label="— 480p (SD) —">
+            <option value="480-mp4">480p · MP4</option>
+            <option value="480-mkv">480p · MKV</option>
+            <option value="480-mov">480p · MOV</option>
+          </optgroup>
+          <optgroup label="— 360p —">
+            <option value="360-mp4">360p · MP4</option>
+            <option value="360-mkv">360p · MKV</option>
+            <option value="360-mov">360p · MOV</option>
+          </optgroup>
+          <optgroup label="— 240p —">
+            <option value="240-mp4">240p · MP4</option>
+            <option value="240-mkv">240p · MKV</option>
+            <option value="240-mov">240p · MOV</option>
+          </optgroup>
+          <optgroup label="— Tylko audio —">
+            <option value="mp3">MP3 · audio</option>
+            <option value="m4a">M4A · audio</option>
+          </optgroup>
+        </select>
+        <button class="btn-primary" id="dl-btn" onclick="startDownload(false)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <path d="M7 1v8M3 6l4 4 4-4"/> <path d="M1 12h12"/>
+          </svg>
+          Pobierz
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="streams" class="tab-content">
+    <div class="card">
+      <div class="section-label">Nagrywanie Strumieni (Live)</div>
+      <div class="url-row">
+        <input type="text" id="stream-url-input" placeholder="Link do transmisji na żywo...">
+        <button class="btn-secondary" onclick="fetchStreamFormats()">Sprawdź formaty</button>
+      </div>
+      <div class="opts-row">
+        <select id="stream-fmt-select">
+          <optgroup label="— Formaty wewnętrzne —">
+            <option value="best">Najlepsza jakość (auto)</option>
+            <option value="best-mp4">Najlepsze Audio + Video · MP4</option>
+          </optgroup>
+        </select>
+        <button class="btn-primary" id="stream-dl-btn" onclick="startDownload(true)">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+            <circle cx="5" cy="5" r="5"/>
+          </svg>
+          Nagrywaj
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="console-tab" class="tab-content">
+    <div class="card">
+      <div class="section-label">Logi systemowe</div>
+      <div id="console-output" class="console-container"></div>
+    </div>
+  </div>
+
+  <div id="settings" class="tab-content">
+    <div class="card">
+      <div class="section-label">Wygląd</div>
+
+      <div class="setting-row">
+        <div class="setting-meta">
+          <div class="setting-name">Motyw kolorystyczny</div>
+          <div class="setting-desc">Jasny, ciemny lub automatyczny (zgodny z ustawieniami systemu).</div>
+        </div>
+        <div class="seg-ctrl" id="theme-ctrl">
+          <button class="seg-btn" data-v="light"  onclick="setTheme('light')">Jasny</button>
+          <button class="seg-btn" data-v="auto"   onclick="setTheme('auto')">Auto</button>
+          <button class="seg-btn" data-v="dark"   onclick="setTheme('dark')">Ciemny</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-meta">
+          <div class="setting-name">Rozmiar okna</div>
+          <div class="setting-desc">Kompakt (900×640), Normalny (1080×780), Duże (1380×900).</div>
+        </div>
+        <div class="seg-ctrl" id="size-ctrl">
+          <button class="seg-btn" data-v="compact" onclick="setWindowSize('compact')">Kompakt</button>
+          <button class="seg-btn" data-v="normal"  onclick="setWindowSize('normal')">Normalny</button>
+          <button class="seg-btn" data-v="large"   onclick="setWindowSize('large')">Duże</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-meta">
+          <div class="setting-name">Grubość czcionki</div>
+          <div class="setting-desc">Zmienia grubość tekstu w całym interfejsie.</div>
+        </div>
+        <div class="seg-ctrl" id="weight-ctrl">
+          <button class="seg-btn" data-v="thin"   onclick="setFontWeight('thin')">Cienka</button>
+          <button class="seg-btn" data-v="normal" onclick="setFontWeight('normal')">Normalna</button>
+          <button class="seg-btn" data-v="bold"   onclick="setFontWeight('bold')">Pogrubiona</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Działanie</div>
+
+      <div class="setting-row">
+        <div class="setting-meta">
+          <div class="setting-name">Działanie w tle</div>
+          <div class="setting-desc">Zamknięcie okna minimalizuje aplikację do zasobnika (Windows) lub paska menu (macOS) zamiast ją kończyć.</div>
+        </div>
+        <label class="toggle-sw">
+          <input type="checkbox" id="tray-check" onchange="applyTrayBehavior(this.checked)">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-meta">
+          <div class="setting-name">Dźwięki powiadomień</div>
+          <div class="setting-desc">Sygnały dźwiękowe przy ukończeniu pobierania, błędzie i zakończeniu transkrypcji.</div>
+        </div>
+        <label class="toggle-sw">
+          <input type="checkbox" id="sounds-check" onchange="applySoundsSetting(this.checked)">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-meta">
+          <div class="setting-name">Ciasteczka przeglądarki</div>
+          <div class="setting-desc">Wymagane do pobierania z Instagrama i Facebooka. Wybierz przeglądarkę, w której masz zalogowane konto.</div>
+        </div>
+        <div class="seg-ctrl" id="cookies-ctrl">
+          <button class="seg-btn" data-v=""        onclick="setCookiesBrowser('')">Brak</button>
+          <button class="seg-btn" data-v="chrome"  onclick="setCookiesBrowser('chrome')">Chrome</button>
+          <button class="seg-btn" data-v="firefox" onclick="setCookiesBrowser('firefox')">Firefox</button>
+          <button class="seg-btn" data-v="safari"  onclick="setCookiesBrowser('safari')">Safari</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Diagnostyka</div>
+      <div class="setting-row">
+        <div class="setting-meta">
+          <div class="setting-name">Logi aplikacji</div>
+          <div class="setting-desc">Szczegółowy dziennik zdarzeń — przydatny przy zgłaszaniu błędów.</div>
+        </div>
+        <button class="btn-about-link" onclick="showLogs()">Pokaż logi</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">O aplikacji</div>
+      <div id="about-info" class="about-grid"></div>
+      <div class="about-links">
+        <button class="btn-about-link" onclick="openGitHub('releases')">↓ Releases</button>
+        <button class="btn-about-link" onclick="openGitHub('repo')">Kod źródłowy</button>
+        <button class="btn-about-link" onclick="openGitHub('issues')">Zgłoś błąd</button>
+      </div>
+    </div>
+  </div>
+  <style>
+    .checkbox-container {
+      display: block; position: relative; padding-left: 24px;
+      margin-bottom: 12px; cursor: pointer; font-size: 13px;
+      user-select: none; color: var(--text-2); font-weight: 500; letter-spacing: -0.01em;
+    }
+    .checkbox-container input { position: absolute; opacity: 0; cursor: pointer; height: 0; width: 0; }
+    .checkmark { position: absolute; top: 0; left: 0; height: 16px; width: 16px; background-color: var(--surf-muted); border: 1px solid var(--border); border-radius: 4px; transition: background 0.15s, border-color 0.15s; }
+    .checkbox-container:hover input ~ .checkmark { background-color: #EAEAEA; }
+    .checkbox-container input:checked ~ .checkmark { background-color: var(--red); border-color: var(--red); }
+    .checkmark:after { content: ""; position: absolute; display: none; }
+    .checkbox-container input:checked ~ .checkmark:after { display: block; }
+    .checkbox-container .checkmark:after { left: 5px; top: 2px; width: 5px; height: 9px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  </style>
+
+  <!-- Karta kolejki -->
+  <div class="card">
+    <div class="section-label">Historia pobierania</div>
+    <div id="task-list" ondragover="event.preventDefault()">
+      <div class="empty">Brak zadań — wklej link i kliknij Pobierz</div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Toast powiadomienie -->
+<div class="toast" id="toast"></div>
+
+<!-- Log modal -->
+<div id="log-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;width:min(1200px,97vw);height:88vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,0.3)">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0">
+      <span style="font-size:13px;font-weight:700;color:var(--text-1)">Logi aplikacji</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn-about-link" onclick="refreshLogs()">Odśwież</button>
+        <button class="btn-about-link" onclick="copyLogs()">Kopiuj</button>
+        <button class="btn-about-link" onclick="document.getElementById('log-modal').style.display='none'">✕ Zamknij</button>
+      </div>
+    </div>
+    <textarea id="log-content" readonly
+      style="flex:1;resize:none;border:none;outline:none;padding:16px 20px;font-family:monospace;font-size:11.5px;
+             line-height:1.7;background:var(--surf-subtle);color:var(--text-2);overflow-y:auto;white-space:pre"></textarea>
+  </div>
+</div>
+
+<!-- Transcription language modal -->
+<div id="lang-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;width:min(420px,92vw);padding:22px;box-shadow:0 24px 80px rgba(0,0,0,0.3)">
+    <div style="font-size:14px;font-weight:700;color:var(--text-1);margin-bottom:6px;letter-spacing:-0.01em">Wybierz język transkrypcji</div>
+    <div style="font-size:12px;color:var(--text-2);margin-bottom:14px;line-height:1.5">
+      Wybór konkretnego języka znacznie poprawia jakość transkrypcji. Dla nagrań po polsku wybierz <strong>Polski</strong>.
+    </div>
+    <select id="lang-select" style="height:38px;width:100%;border:1px solid var(--border);border-radius:8px;padding:0 10px;font-size:13px;font-family:inherit;background:var(--surf-subtle);color:var(--text-1);margin-bottom:14px;cursor:pointer">
+      <option value="pl" selected>Polski</option>
+      <option value="">Wykryj automatycznie</option>
+      <option value="en">Angielski</option>
+      <option value="uk">Ukraiński</option>
+      <option value="de">Niemiecki</option>
+      <option value="ru">Rosyjski</option>
+      <option value="cs">Czeski</option>
+      <option value="sk">Słowacki</option>
+      <option value="es">Hiszpański</option>
+      <option value="fr">Francuski</option>
+      <option value="it">Włoski</option>
+      <option value="pt">Portugalski</option>
+      <option value="nl">Niderlandzki</option>
+      <option value="sv">Szwedzki</option>
+      <option value="tr">Turecki</option>
+      <option value="ja">Japoński</option>
+      <option value="zh">Chiński</option>
+      <option value="ko">Koreański</option>
+      <option value="ar">Arabski</option>
+    </select>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn-about-link" onclick="document.getElementById('lang-modal').style.display='none'; window._langModalResolve && window._langModalResolve(null)">Anuluj</button>
+      <button class="btn-about-link" style="background:var(--red);color:#fff;border-color:var(--red)" onclick="_langModalConfirm()">Rozpocznij</button>
+    </div>
+  </div>
+</div>
+
+<footer class="sys-footer">
+  <div class="footer-left" id="sys-footer">Ładowanie wersji…</div>
+  <button class="btn-update-all" id="update-env-btn" onclick="updateEnvironment()">Aktualizuj komponenty</button>
+</footer>
+
+<script>
+  const tasks = {};
+  const pendingStop = new Set();
+
+  function hideLoadingScreen() {
+    const el = document.getElementById('loading-screen');
+    if (!el) return;
+    el.classList.add('fade-out');
+    setTimeout(() => { if (el.parentNode) el.remove(); }, 400);
+  }
+  // Fallback: force-hide after 15s in case WS never connects
+  setTimeout(hideLoadingScreen, 15000);
+
+  function switchTab(id) {
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    event.currentTarget.classList.add('active');
+    if (id === 'settings') loadAboutInfo();
+    if (id === 'recording') _initRecordingTab();
+  }
+
+  (function initWpBridge() {
+    let n = 0;
+    function tick() {
+      n += 1;
+      if (typeof QWebChannel === 'undefined' || typeof qt === 'undefined' || !qt.webChannelTransport) {
+        if (n < 80) setTimeout(tick, 80);
+        return;
+      }
+      new QWebChannel(qt.webChannelTransport, function (channel) {
+        window.wpBridge = channel.objects.wpBridge;
+        // Restore persisted settings that require the native bridge
+        const savedSize = localStorage.getItem('wp-window-size') || 'normal';
+        window.wpBridge.resize_window_preset(savedSize);
+        const savedTray = localStorage.getItem('wp-tray') === '1';
+        window.wpBridge.set_minimize_to_tray(savedTray);
+      });
+    }
+    tick();
+  })();
+
+  async function updateEnvironment() {
+    const btn = document.getElementById('update-env-btn');
+    btn.disabled = true;
+    showToast('Aktualizacja — sprawdź zakładkę Konsola…');
+    try {
+      const res = await fetch('/api/system/update', { method: 'POST' });
+      const data = await res.json();
+      if (!data.ok) showToast('Błąd aktualizacji: ' + (data.error || ''), true);
+    } catch {
+      showToast('Błąd połączenia z serwerem', true);
+    } finally {
+      // Re-enable after 60s (update takes time); system_info_refresh will restore footer
+      setTimeout(() => { btn.disabled = false; }, 60000);
+    }
+  }
+
+  async function loadSystemFooter() {
+    const el = document.getElementById('sys-footer');
+    try {
+      const res = await fetch('/api/system-info');
+      const d = await res.json();
+      
+      // Sprawdzanie czy wersja jest z bieżącego lub poprzedniego roku
+      const currentYear = new Date().getFullYear().toString();
+      const prevYear = (new Date().getFullYear() - 1).toString();
+      const isYtOk = d.yt_dlp && (
+        d.yt_dlp.startsWith(currentYear) || d.yt_dlp.startsWith(prevYear)
+      );
+      const ytClass = isYtOk ? 'status-ok' : 'status-old';
+
+      const whOk = d.whisper && d.whisper !== 'brak';
+      const whClass = whOk ? 'status-ok' : 'status-old';
+      const slOk = d.streamlink && d.streamlink !== 'brak';
+      const slClass = slOk ? 'status-ok' : 'status-old';
+      const phpPart = d.php_available
+        ? `<span class="sep">|</span><span class="status-ok">PHP ${d.php}</span>`
+        : '';
+
+      el.innerHTML =
+        `<span class="status-ok">WP v${d.app_version}</span><span class="sep">|</span>` +
+        `<span class="${ytClass}">yt-dlp: ${d.yt_dlp}</span><span class="sep">|</span>` +
+        `<span class="${slClass}">streamlink: ${d.streamlink || 'brak'}</span><span class="sep">|</span>` +
+        `<span class="${whClass}">whisper: ${d.whisper || 'brak'}</span><span class="sep">|</span>` +
+        `Python: ${d.python}` + phpPart;
+    } catch {
+      el.textContent = 'Nie udało się odczytać wersji środowiska.';
+    }
+  }
+
+  /** Otwiera przeglądarkę na stronie GitHub, gdzie użytkownik może pobrać nową wersję. */
+  function updateFromGitHub() {
+    const btn = document.getElementById('btn-github-update');
+    if (btn) btn.disabled = true;
+    
+    // Otwórz przeglądarkę na stronie releases Twojego repozytorium
+    // Używamy window.wpBridge.open_external_link, aby otworzyć link w domyślnej przeglądarce systemowej
+    if (window.wpBridge && typeof window.wpBridge.open_external_link === 'function') {
+      window.wpBridge.open_external_link('https://github.com/geroo94/wp-downloader/releases');
+      showToast('Otwieram stronę GitHub w przeglądarce. Pobierz najnowszą wersję i zastąp nią obecną aplikację.');
+    } else {
+      showToast('Nie można otworzyć przeglądarki. Odwiedź https://github.com/geroo94/wp-downloader/releases', true);
+    }
+    setTimeout(() => { if (btn) btn.disabled = false; }, 5000); // Odblokuj przycisk po 5 sekundach
+  }
+  loadSystemFooter();
+  setInterval(loadSystemFooter, 60000);
+
+  function logToConsole(msg) {
+    const con = document.getElementById('console-output');
+    const line = document.createElement('div');
+    line.className = 'console-line';
+    line.innerHTML = `<span class="ts">${new Date().toLocaleTimeString()}</span> ${escHtml(msg)}`;
+    con.appendChild(line);
+    con.scrollTop = con.scrollHeight;
+  }
+
+  // ── WebSocket ──────────────────────────────────────────
+  // Otwieramy stałe połączenie z serwerem
+  // onmessage = co robić gdy serwer wyśle wiadomość
+  function connectWS() {
+    const ws = new WebSocket('ws://127.0.0.1:8765/ws');
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.type === 'init') {
+        hideLoadingScreen();
+        data.tasks.forEach(t => { tasks[t.task_id] = t; });
+        renderTasks();
+
+      } else if (data.type === 'task_update') {
+        // Aktualizacja jednego zadania (postęp, status)
+        const prev = tasks[data.task_id];
+        const prevStatus = prev ? prev.status : null;
+        const prevTranscription = prev ? prev.transcription : null;
+        if (tasks[data.task_id]) {
+          Object.assign(tasks[data.task_id], data);
+        }
+        if (data.status && data.status !== 'downloading') {
+          pendingStop.delete(data.task_id);
+        }
+        // Dźwięki powiadomień
+        if (data.status === 'done' && prevStatus !== 'done') playSound('done');
+        else if (data.status === 'error' && prevStatus !== 'error') playSound('error');
+        if (data.transcription && data.transcription !== 'in_progress' && data.transcription !== 'error'
+            && prevTranscription === 'in_progress') {
+          playSound('transcription');
+        }
+        renderTasks();
+      } else if (data.type === 'update_log') {
+        logToConsole(data.message);
+        const msg = data.message.toLowerCase();
+        if (msg.includes('aktualne') || msg.includes('up to date')) {
+          showToast('Komponenty aktualne!');
+        }
+      } else if (data.type === 'system_info_refresh') {
+        loadSystemFooter();
+      } else if (data.type === 'task_removed') {
+        delete tasks[data.task_id];
+        renderTasks();
+      }
+    };
+
+    ws.onclose = () => {
+      // Połączenie padło — spróbuj ponownie za 2 sekundy
+      setTimeout(connectWS, 2000);
+    };
+  }
+
+  connectWS();
+
+  // ── Pobieranie formatów ────────────────────────────────
+  async function fetchFormats() {
+    const url = document.getElementById('url-input').value.trim();
+    if (!url) { shakeInput(); return; }
+    await _loadFormatsInto(url, 'fmt-select', false);
+  }
+
+  async function fetchStreamFormats() {
+    const url = document.getElementById('stream-url-input').value.trim();
+    if (!url) { showToast('Wklej link do streamu', true); return; }
+    await _loadFormatsInto(url, 'stream-fmt-select', true);
+  }
+
+  async function _loadFormatsInto(url, selectId, isStream) {
+    const select = document.getElementById(selectId);
+    select.innerHTML = '<option>Ładowanie…</option>';
+
+    const internalFormats = isStream
+      ? [
+          { id: 'best',     label: 'Najlepsza jakość (auto)' },
+          { id: 'best-mp4', label: 'Najlepsze Audio + Video · MP4' },
+        ]
+      : [
+          { id: 'best-mp4', label: 'Najlepsze Audio + Video · MP4' },
+          { id: 'best-mkv', label: 'Najlepsze Audio + Video · MKV' },
+          { id: 'best-mov', label: 'Najlepsze Audio + Video · MOV' },
+          { id: 'mp3',      label: 'MP3 · tylko audio' },
+          { id: 'm4a',      label: 'M4A · tylko audio' },
+        ];
+
+    const internalIds = new Set(internalFormats.map(f => f.id));
+
+    let html = `<optgroup label="— Formaty wewnętrzne —">`;
+    html += internalFormats.map(f =>
+      `<option value="${escHtml(f.id)}">${escHtml(f.label)}</option>`
+    ).join('');
+    html += '</optgroup>';
+
+    try {
+      const cb = localStorage.getItem('wp-cookies-browser') || '';
+      const res = await fetch(`/api/formats?url=${encodeURIComponent(url)}${cb ? '&cookies_browser=' + encodeURIComponent(cb) : ''}`);
+      const data = await res.json();
+      const external = (data.formats || []).filter(f => !internalIds.has(f.id));
+      if (external.length > 0) {
+        html += `<optgroup label="— Formaty zewnętrzne —">`;
+        html += external.map(f =>
+          `<option value="${escHtml(f.id)}">${escHtml(f.label)}</option>`
+        ).join('');
+        html += '</optgroup>';
+        showToast(`Załadowano ${external.length} formatów`);
+      } else if (data.error) {
+        // External formats unavailable — inform but don't block download
+        const cleanErr = data.error.replace(/\x1b\[[0-9;]*m/g, '').replace(/^ERROR:\s*/i, '').substring(0, 120);
+        showToast(`Formaty zewnętrzne niedostępne — użyj formatu wewnętrznego. (${cleanErr})`, false);
+      } else {
+        showToast('Brak formatów zewnętrznych — użyj formatu wewnętrznego');
+      }
+    } catch {
+      showToast('Błąd połączenia z serwerem formatów', true);
+    }
+
+    select.innerHTML = html;
+  }
+
+  // ── Dodanie zadania pobierania ─────────────────────────
+  async function startDownload(isStream = false) {
+    const urlInput = isStream ? document.getElementById('stream-url-input') : document.getElementById('url-input');
+    const url = urlInput.value.trim();
+    const format_id = isStream
+      ? (document.getElementById('stream-fmt-select').value || 'best')
+      : (document.getElementById('fmt-select').value || 'mp4-720');
+    const live_record = isStream;
+
+    if (!url) { shakeInput(); return; }
+
+    // 1. Poproś o miejsce zapisu przez mostek Qt
+    if (!window.wpBridge) { 
+      showToast('Inicjalizacja systemu...', true); 
+      return; 
+    }
+
+    // Znajdź przycisk przed wejściem w callback, aby uniknąć błędu 'event' wewnątrz asynchronicznej funkcji
+    const btn = isStream
+      ? document.getElementById('stream-dl-btn')
+      : document.getElementById('dl-btn');
+
+    const ext = isStream ? 'mp4' : (format_id.includes('mp3') ? 'mp3' : 'mp4');
+    const filter = isStream ? "MP4 Video (*.mp4)" : (ext === 'mp3' ? "MP3 Audio (*.mp3)" : "MP4 Video (*.mp4)");
+
+    window.wpBridge.pick_save_file("video_" + Date.now() + "." + ext, filter, async function(output_path) {
+      if (!output_path) {
+        showToast('Anulowano wybór miejsca zapisu');
+        return;
+      }
+
+      if (btn) btn.disabled = true;
+      showToast('Dodawanie do kolejki...');
+
+      try {
+        await executeDownload(url, format_id, output_path, live_record, urlInput);
+        showToast('Zadanie zaakceptowane!');
+      } catch (err) {
+        showToast('Błąd: ' + err.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  async function executeDownload(url, format_id, output_path, live_record, urlInput) {
+    try {
+      const res = await fetch('/api/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, format_id, output_path, live_record, cookies_browser: localStorage.getItem('wp-cookies-browser') || '' })
+      });
+
+      const data = await res.json();
+
+      if (data.task_id) {
+        logToConsole(`Dodano zadanie: ${url} -> ${output_path}`);
+        tasks[data.task_id] = {
+          task_id: data.task_id,
+          url,
+          title: url.length > 50 ? url.slice(0, 47) + '…' : url,
+          format_id,
+          output_path: output_path,
+          live_record,
+          status: 'queue',
+          progress: 0
+        };
+        renderTasks();
+        urlInput.value = '';
+      } else {
+        throw new Error(data.error || 'Błąd serwera');
+      }
+    } catch (e) {
+      throw new Error('Nie można połączyć się z serwerem');
+    }
+  }
+
+  // ── Renderowanie listy zadań ───────────────────────────
+  function renderTasks() {
+    const list = document.getElementById('task-list');
+    const taskArr = Object.values(tasks);
+
+    // Save current progress bar positions so we don't reset animation to 0
+    const prevProg = {};
+    list.querySelectorAll('.task[data-id]').forEach(el => {
+      const bar = el.querySelector('.progress-bar');
+      if (bar) prevProg[el.dataset.id] = parseFloat(bar.style.width) || 0;
+    });
+
+    if (taskArr.length === 0) {
+      list.innerHTML = `<div class="empty">
+        <svg class="empty-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 4v16M10 12l8 8 8-8"/><path d="M6 28h24"/>
+        </svg>
+        Brak zadań — wklej link i kliknij Pobierz
+      </div>`;
+      return;
+    }
+
+    const statusLabel = {
+      queue: 'Kolejka',
+      downloading: 'Pobieranie',
+      merging: 'Scalanie',
+      done: 'Gotowe',
+      error: 'Błąd',
+      cancelled: 'Anulowano',
+    };
+
+    list.innerHTML = taskArr.map(t => {
+      const rid = escHtml(t.task_id);
+
+      // Miniatura: pokazuj obraz jeśli URL jest dostępny (tylko https://)
+      const thumbHtml = (t.thumbnail_url && t.thumbnail_url.startsWith('https://'))
+        ? `<img src="${escHtml(t.thumbnail_url)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+        : `<svg viewBox="0 0 18 14"><rect x="1" y="1" width="16" height="12" rx="2"/><polygon points="7,4 13,7 7,10" fill="#bbb" stroke="none"/></svg>`;
+
+      // Przyciski akcji
+      const rm = (t.status !== 'downloading' && t.status !== 'merging')
+        ? `<button type="button" data-act="rm" data-id="${rid}">Usuń</button>`
+        : '';
+      // Live stream w trakcie → "Zatrzymaj i zapisz" (SIGINT) + "Anuluj" (SIGKILL)
+      const stopBtn = (t.status === 'downloading' && t.live_record)
+        ? pendingStop.has(t.task_id)
+          ? `<button type="button" class="warning" disabled>Zatrzymywanie…</button>`
+          : `<button type="button" class="warning" data-act="stop" data-id="${rid}">Zatrzymaj i zapisz</button>`
+        : '';
+      const cx = (t.status === 'downloading' && !t.live_record)
+        ? `<button type="button" class="danger" data-act="cx" data-id="${rid}">Anuluj</button>`
+        : '';
+      // Ikona "Pokaż w folderze" — tylko gdy pobieranie zakończone i ścieżka istnieje
+      const revealBtn = (t.status === 'done' && t.output_path)
+        ? `<button type="button" class="btn-icon green" data-act="reveal" data-id="${rid}" title="Pokaż w folderze">
+             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+               <path d="M1 5C1 4.2 1.7 3.5 2.5 3.5H5.2L6.2 5H11.5C12.3 5 13 5.7 13 6.5V10C13 10.8 12.3 11.5 11.5 11.5H2.5C1.7 11.5 1 10.8 1 10V5Z"/>
+             </svg>
+           </button>`
+        : '';
+      // Ikona "Transkrybuj" — tylko dla zakończonych zadań z plikiem
+      let transcribeBtn = '';
+      if (t.status === 'done' && t.output_path) {
+        if (!t.transcription) {
+          transcribeBtn = `<button type="button" class="btn-icon purple" data-act="transcribe" data-id="${rid}" title="Utwórz transkrypcję (Whisper)">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4.5" y="1" width="5" height="7" rx="2.5"/>
+              <path d="M2 7.5a5 5 0 0 0 10 0"/><line x1="7" y1="12.5" x2="7" y2="10.5"/>
+              <line x1="5" y1="13" x2="9" y2="13"/>
+            </svg>
+          </button>`;
+        } else if (t.transcription === 'in_progress') {
+          transcribeBtn = `<button type="button" class="btn-icon purple" disabled title="Transkrypcja w toku…">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <path d="M7 1.5a5.5 5.5 0 0 1 0 11" stroke-dasharray="3 2"/>
+            </svg>
+          </button>`;
+        } else if (t.transcription === 'error') {
+          transcribeBtn = `<button type="button" class="btn-icon red" data-act="transcribe" data-id="${rid}" title="Transkrypcja nieudana — spróbuj ponownie">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <circle cx="7" cy="7" r="5.5"/><line x1="7" y1="4" x2="7" y2="7.5"/><circle cx="7" cy="9.5" r="0.5" fill="currentColor"/>
+            </svg>
+          </button>`;
+        } else {
+          transcribeBtn = `<button type="button" class="btn-icon green" title="Transkrypcja gotowa: ${escHtml(t.transcription)}">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="2,7 5.5,10.5 12,3.5"/>
+            </svg>
+          </button>`;
+        }
+      }
+      // "Duplikuj" — dla zwykłych pobierań i live przy statusie downloading/done/error/cancelled
+      const cloneBtn = (t.status === 'downloading' || t.status === 'done' || t.status === 'error' || t.status === 'cancelled')
+        ? `<button type="button" class="btn-icon blue" data-act="clone" data-id="${rid}" title="Duplikuj pobieranie">
+             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+               <rect x="4.5" y="4.5" width="8" height="8" rx="1.5"/>
+               <path d="M9.5 4.5V2.5A1.5 1.5 0 0 0 8 1H2.5A1.5 1.5 0 0 0 1 2.5V8A1.5 1.5 0 0 0 2.5 9.5H4.5"/>
+             </svg>
+           </button>`
+        : '';
+      const actions = (rm || stopBtn || cx || revealBtn || cloneBtn || transcribeBtn)
+        ? `<div class="task-actions">${revealBtn}${transcribeBtn}${cloneBtn}${rm}${stopBtn}${cx}</div>` : '';
+
+      // Progress area
+      let progressHtml = '';
+      if (t.live_record && t.status === 'downloading') {
+        const statusText = escHtml(t.live_status || 'Nagrywanie…');
+        progressHtml = `<div class="live-timer"><span class="timer-dot"></span><span class="timer-value">${statusText}</span></div>`;
+      } else if (t.status === 'merging') {
+        progressHtml = `<div class="merge-bar"><div class="merge-track"><div class="merge-track-inner"></div></div><div class="merge-label">Scalanie pliku…</div></div>`;
+      } else if (t.status !== 'queue') {
+        const speedTxt = (t.status === 'downloading' && t.speed_str) ? escHtml(t.speed_str) : '';
+        progressHtml = `<div class="progress-wrap"><div class="progress-bar ${t.status}" data-prog="${t.progress || 0}"></div></div><div class="dl-speed">${speedTxt}</div>`;
+      }
+
+      return `
+      <div class="task" draggable="true" data-id="${rid}" ondragstart="handleDragStart(event)" ondragend="handleDragEnd(event)">
+        <div class="drag-handle">⋮⋮</div>
+        <div class="task-thumb">${thumbHtml}</div>
+        <div class="task-info">
+          <div class="task-title">${escHtml(t.title || t.url)}</div>
+          <div class="task-meta">${escHtml(t.format_id || '')}${t.output_path ? ' · ' + escHtml(t.output_path) : ''}${t.live_record ? ' · Live Stream' : ''}</div>
+          ${progressHtml}
+        </div>
+        ${actions}
+        <span class="badge ${t.status}">${statusLabel[t.status] || t.status}</span>
+      </div>`;
+    }).join('');
+
+    // Animate progress bars from previous position → new value using anime.js
+    list.querySelectorAll('.task[data-id]').forEach(el => {
+      const id = el.dataset.id;
+      const bar = el.querySelector('.progress-bar');
+      if (!bar) return;
+      const from = prevProg[id] !== undefined ? prevProg[id] : 0;
+      const to = parseFloat(bar.dataset.prog) || 0;
+      bar.style.width = from + '%';
+      if (Math.abs(to - from) > 0.2 && typeof anime !== 'undefined') {
+        anime({ targets: bar, width: to + '%', duration: 450, easing: 'easeOutQuart' });
+      } else {
+        bar.style.width = to + '%';
+      }
+    });
+
+    // Click handling is via a single delegated listener on #task-list (see initTaskListDelegation).
+  }
+
+  // Delegated click handler — attached ONCE so buttons keep responding during frequent DOM rebuilds.
+  function initTaskListDelegation() {
+    const list = document.getElementById('task-list');
+    if (!list || list.dataset.delegated === '1') return;
+    list.dataset.delegated = '1';
+    list.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('button[data-act]');
+      if (!btn || !list.contains(btn)) return;
+      const id = btn.getAttribute('data-id');
+      const act = btn.getAttribute('data-act');
+      try {
+        if (act === 'rm') {
+          const r = await fetch('/api/tasks/' + encodeURIComponent(id), { method: 'DELETE' });
+          if (!r.ok) {
+            const e = await r.json().catch(() => ({}));
+            showToast(e.error || 'Nie można usunąć', true);
+          }
+        } else if (act === 'cx') {
+          const r = await fetch('/api/tasks/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
+          if (!r.ok) {
+            const e = await r.json().catch(() => ({}));
+            showToast(e.error || 'Nie można anulować', true);
+          }
+        } else if (act === 'stop') {
+          pendingStop.add(id);
+          renderTasks();
+          const r = await fetch('/api/tasks/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
+          if (!r.ok) {
+            pendingStop.delete(id);
+            renderTasks();
+            const e = await r.json().catch(() => ({}));
+            showToast(e.error || 'Nie można zatrzymać', true);
+          } else {
+            showToast('Zatrzymuję nagrywanie i zapisuję plik…');
+          }
+        } else if (act === 'transcribe') {
+          const lang = await pickTranscriptionLanguage();
+          if (lang === null) return; // user cancelled
+          const r = await fetch('/api/tasks/' + encodeURIComponent(id) + '/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ language: lang })
+          });
+          if (r.ok) {
+            showToast('Transkrypcja rozpoczęta (' + (lang || 'auto') + ') — może potrwać kilka minut…');
+          } else {
+            const e = await r.json().catch(() => ({}));
+            showToast(e.error || 'Nie można uruchomić transkrypcji', true);
+          }
+        } else if (act === 'reveal') {
+          const r = await fetch('/api/tasks/' + encodeURIComponent(id) + '/reveal', { method: 'POST' });
+          if (!r.ok) {
+            const e = await r.json().catch(() => ({}));
+            showToast(e.error || 'Nie można otworzyć folderu', true);
+          }
+        } else if (act === 'clone') {
+          const t = tasks[id];
+          if (!t || !window.wpBridge) { showToast('Mostek Qt niedostępny', true); return; }
+          const ext = t.live_record ? 'mp4' : (t.format_id.includes('mp3') ? 'mp3' : 'mp4');
+          const filter = ext === 'mp3' ? 'MP3 Audio (*.mp3)' : 'MP4 Video (*.mp4)';
+          window.wpBridge.pick_save_file('kopia_' + Date.now() + '.' + ext, filter, async function(output_path) {
+            if (!output_path) return;
+            try {
+              const res = await fetch('/api/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: t.url, format_id: t.format_id, output_path, live_record: t.live_record, cookies_browser: localStorage.getItem('wp-cookies-browser') || '' })
+              });
+              const data = await res.json();
+              if (data.task_id) {
+                tasks[data.task_id] = {
+                  task_id: data.task_id,
+                  url: t.url,
+                  title: t.title || t.url,
+                  format_id: t.format_id,
+                  output_path,
+                  live_record: t.live_record,
+                  status: 'queue',
+                  progress: 0
+                };
+                renderTasks();
+                showToast('Duplikat dodany do kolejki!');
+              } else {
+                showToast('Błąd: ' + (data.error || 'Nieznany błąd'), true);
+              }
+            } catch {
+              showToast('Błąd połączenia z serwerem', true);
+            }
+          });
+        }
+      } catch {
+        showToast('Błąd sieci', true);
+      }
+    });
+  }
+  initTaskListDelegation();
+
+  // ── Drag & Drop Logic ──────────────────────────────────
+  let draggedItem = null;
+
+  function handleDragStart(e) {
+    draggedItem = e.currentTarget;
+    e.currentTarget.classList.add('dragging');
+  }
+
+  function handleDragEnd(e) {
+    e.currentTarget.classList.remove('dragging');
+    const taskElements = document.querySelectorAll('.task');
+    const newOrderIds = Array.from(taskElements).map(el => el.getAttribute('data-id'));
+    
+    // Wyślij nową kolejność do backendu
+    fetch('/api/tasks/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: newOrderIds })
+    });
+  }
+
+  document.getElementById('task-list').addEventListener('dragover', e => {
+    e.preventDefault();
+    const afterElement = getDragAfterElement(document.getElementById('task-list'), e.clientY);
+    const list = document.getElementById('task-list');
+    if (afterElement == null) {
+      list.appendChild(draggedItem);
+    } else {
+      list.insertBefore(draggedItem, afterElement);
+    }
+  });
+
+  function getDragAfterElement(container, y) {
+    const draggableElements = [...container.querySelectorAll('.task:not(.dragging)')];
+    return draggableElements.reduce((closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) {
+        return { offset: offset, element: child };
+      } else {
+        return closest;
+      }
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+  }
+
+  // ── Pomocnicze ─────────────────────────────────────────
+  function escHtml(str) {
+    // Zabezpieczenie przed XSS — zamień < > " na encje HTML
+    // XSS = atak gdzie ktoś wstrzykuje JavaScript przez pole tekstowe
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // Opens the transcription language modal and resolves with an ISO code
+  // (e.g. "pl", "en", "" for auto-detect), or null if the user cancelled.
+  function pickTranscriptionLanguage() {
+    return new Promise(resolve => {
+      const modal = document.getElementById('lang-modal');
+      const sel = document.getElementById('lang-select');
+      const saved = localStorage.getItem('wp-transcribe-lang');
+      if (saved !== null && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+      window._langModalResolve = (val) => {
+        window._langModalResolve = null;
+        modal.style.display = 'none';
+        resolve(val);
+      };
+      window._langModalConfirm = () => {
+        const v = sel.value;
+        localStorage.setItem('wp-transcribe-lang', v);
+        window._langModalResolve(v);
+      };
+      modal.style.display = 'flex';
+      setTimeout(() => sel.focus(), 0);
+    });
+  }
+
+  function shakeInput() {
+    const inp = document.getElementById('url-input');
+    inp.classList.add('error');
+    setTimeout(() => inp.classList.remove('error'), 1500);
+  }
+
+  function showToast(msg, isError = false) {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.className = 'toast show' + (isError ? ' error' : '');
+    setTimeout(() => { toast.className = 'toast'; }, 2500);
+  }
+
+  // ── Settings ──────────────────────────────────────────
+
+  function setFontWeight(weight) {
+    document.documentElement.setAttribute('data-weight', weight === 'normal' ? '' : weight);
+    localStorage.setItem('wp-font-weight', weight);
+    document.querySelectorAll('#weight-ctrl .seg-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.v === weight));
+  }
+
+  function setCookiesBrowser(browser) {
+    localStorage.setItem('wp-cookies-browser', browser);
+    document.querySelectorAll('#cookies-ctrl .seg-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.v === browser));
+  }
+
+  async function showLogs() {
+    const modal = document.getElementById('log-modal');
+    const ta = document.getElementById('log-content');
+    ta.value = 'Ładowanie…';
+    modal.style.display = 'flex';
+    try {
+      const r = await fetch('/api/logs?lines=500');
+      ta.value = await r.text();
+      ta.scrollTop = ta.scrollHeight;
+    } catch {
+      ta.value = '(błąd połączenia z serwerem)';
+    }
+  }
+
+  function copyLogs() {
+    const ta = document.getElementById('log-content');
+    navigator.clipboard.writeText(ta.value).then(() => showToast('Skopiowano logi!'));
+  }
+
+  function refreshLogs() { showLogs(); }
+
+  function applySoundsSetting(enabled) {
+    localStorage.setItem('wp-sounds', enabled ? '1' : '0');
+  }
+
+  function _beep(ctx, freq, startDelay, duration, type = 'sine') {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime + startDelay);
+    gain.gain.setValueAtTime(0.13, ctx.currentTime + startDelay);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startDelay + duration);
+    osc.start(ctx.currentTime + startDelay);
+    osc.stop(ctx.currentTime + startDelay + duration + 0.01);
+  }
+
+  function playSound(type) {
+    if (localStorage.getItem('wp-sounds') !== '1') return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (type === 'done') {
+        _beep(ctx, 440, 0,    0.14);
+        _beep(ctx, 660, 0.16, 0.20);
+      } else if (type === 'transcription') {
+        _beep(ctx, 523, 0,    0.12);
+        _beep(ctx, 659, 0.14, 0.12);
+        _beep(ctx, 784, 0.28, 0.22);
+      } else if (type === 'error') {
+        _beep(ctx, 280, 0,    0.13, 'sawtooth');
+        _beep(ctx, 180, 0.15, 0.18, 'sawtooth');
+      }
+    } catch(e) {}
+  }
+
+  async function loadAboutInfo() {
+    const el = document.getElementById('about-info');
+    if (!el) return;
+    try {
+      const d = await (await fetch('/api/system-info')).json();
+      const yr = new Date().getFullYear().toString();
+      const prevYr = (new Date().getFullYear() - 1).toString();
+      const ytOk = d.yt_dlp && (d.yt_dlp.startsWith(yr) || d.yt_dlp.startsWith(prevYr));
+      const rows = [
+        ['WP Downloader', `v${d.app_version}`, 'ok'],
+        ['yt-dlp',        d.yt_dlp  || '—',    ytOk ? 'ok' : 'old'],
+        ['streamlink',    d.streamlink || '—',  d.streamlink && d.streamlink !== 'brak' ? 'ok' : 'bad'],
+        ['Whisper',       d.whisper    || '—',  d.whisper    && d.whisper    !== 'brak' ? 'ok' : 'bad'],
+        ['FFmpeg',        d.ffmpeg     || '—',  d.ffmpeg     && d.ffmpeg     !== 'brak' ? 'ok' : 'bad'],
+        ['Python',        d.python     || '—',  'ok'],
+      ];
+      el.innerHTML = rows.map(([lbl, val, cls]) =>
+        `<div class="about-row">
+          <span class="about-lbl">${lbl}</span>
+          <span class="about-val ${cls}">${escHtml(val)}</span>
+        </div>`
+      ).join('');
+    } catch {
+      el.innerHTML = '<div class="about-row"><span class="about-lbl">Błąd ładowania</span></div>';
+    }
+  }
+
+  function openGitHub(target) {
+    const urls = {
+      releases: 'https://github.com/geroo94/wp-downloader/releases',
+      repo:     'https://github.com/geroo94/wp-downloader',
+      issues:   'https://github.com/geroo94/wp-downloader/issues',
+    };
+    if (window.wpBridge && typeof window.wpBridge.open_external_link === 'function') {
+      window.wpBridge.open_external_link(urls[target]);
+    }
+  }
+
+  function setTheme(theme) {
+    const root = document.documentElement;
+    let effective = theme;
+    if (theme === 'auto') {
+      effective = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    root.setAttribute('data-theme', effective);
+    localStorage.setItem('wp-theme', theme);
+    document.querySelectorAll('#theme-ctrl .seg-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.v === theme));
+  }
+
+  function setWindowSize(preset) {
+    localStorage.setItem('wp-window-size', preset);
+    document.querySelectorAll('#size-ctrl .seg-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.v === preset));
+    if (window.wpBridge && typeof window.wpBridge.resize_window_preset === 'function') {
+      window.wpBridge.resize_window_preset(preset);
+    }
+  }
+
+  function applyTrayBehavior(enabled) {
+    localStorage.setItem('wp-tray', enabled ? '1' : '0');
+    if (window.wpBridge && typeof window.wpBridge.set_minimize_to_tray === 'function') {
+      window.wpBridge.set_minimize_to_tray(enabled);
+    }
+  }
+
+  // ── m3u8 auto-detection ────────────────────────────────
+  async function detectM3u8() {
+    const url = document.getElementById('m3u8-detect-url').value.trim();
+    if (!url) { showToast('Wklej URL strony z transmisją', true); return; }
+    const btn = document.getElementById('m3u8-detect-btn');
+    const spinner = document.getElementById('m3u8-detect-spinner');
+    const resultsBox = document.getElementById('m3u8-detect-results');
+    const errorBox = document.getElementById('m3u8-detect-error');
+    btn.disabled = true;
+    spinner.style.display = '';
+    resultsBox.style.display = 'none';
+    errorBox.style.display = 'none';
+    try {
+      const r = await fetch('/api/m3u8/detect', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})});
+      const d = await r.json();
+      if (d.streams && d.streams.length > 0) {
+        resultsBox.innerHTML = d.streams.map(s => `
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
+            <code style="flex:1;font-size:11px;color:var(--text-1);word-break:break-all">${escHtml(s.url)}</code>
+            <button class="btn-secondary" style="flex-shrink:0;height:28px;font-size:11px"
+              onclick="useM3u8Stream(${JSON.stringify(s.url)})">Użyj</button>
+          </div>`).join('');
+        resultsBox.style.display = '';
+      } else {
+        errorBox.textContent = d.error || 'Nie znaleziono strumieni .m3u8.';
+        errorBox.style.display = '';
+      }
+    } catch(e) {
+      errorBox.textContent = 'Błąd połączenia z serwerem.';
+      errorBox.style.display = '';
+    } finally {
+      btn.disabled = false;
+      spinner.style.display = 'none';
+    }
+  }
+
+  function useM3u8Stream(url) {
+    document.getElementById('proxy-url').value = url;
+    showToast('URL skopiowany do serwera proxy — kliknij Uruchom serwer proxy');
+    document.getElementById('proxy-url').scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+
+  // ── Recording tab init ─────────────────────────────────
+  async function _initRecordingTab() {
+    try {
+      // Restore proxy state if still running
+      const ps = await (await fetch('/api/proxy/status')).json();
+      if (ps.running) {
+        document.getElementById('proxy-url-display').textContent = ps.url;
+        document.getElementById('proxy-status-box').style.display = '';
+        document.getElementById('proxy-stop-btn').style.display = '';
+        document.getElementById('proxy-start-btn').style.display = 'none';
+        _startProxyPoll();
+      }
+      // Restore OBS state if connected
+      const obs = await (await fetch('/api/obs/status')).json();
+      if (obs.connected) {
+        _setOBSConnected(true, `OBS v${obs.obs_version}`);
+        refreshOBSScenes();
+        _obsIsRecording = obs.recording;
+        if (obs.recording) {
+          const btn = document.getElementById('obs-record-btn');
+          btn.textContent = '■ Zatrzymaj nagrywanie';
+          btn.style.background = 'var(--red)';
+          document.getElementById('obs-timecode').textContent = obs.timecode || '';
+          _obsRecordTimer = setInterval(_pollOBSRecord, 1000);
+        }
+      }
+    } catch {}
+  }
+
+  // ── Stream proxy ───────────────────────────────────────
+  let _proxyPollTimer = null;
+
+  async function startProxy() {
+    const url = document.getElementById('proxy-url').value.trim();
+    if (!url) { showToast('Wklej URL streamu', true); return; }
+    const quality = document.getElementById('proxy-quality').value;
+    const port = parseInt(document.getElementById('proxy-port').value) || 8888;
+
+    document.getElementById('proxy-start-btn').disabled = true;
+    document.getElementById('proxy-spinner').style.display = '';
+    document.getElementById('proxy-error-box').style.display = 'none';
+    document.getElementById('proxy-status-box').style.display = 'none';
+
+    try {
+      const r = await fetch('/api/proxy/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, quality, port })
+      });
+      const d = await r.json();
+      if (d.ok) {
+        document.getElementById('proxy-url-display').textContent = d.url;
+        document.getElementById('proxy-status-box').style.display = '';
+        document.getElementById('proxy-stop-btn').style.display = '';
+        document.getElementById('proxy-start-btn').style.display = 'none';
+        _startProxyPoll();
+      } else {
+        document.getElementById('proxy-error-box').textContent = 'Błąd: ' + (d.error || 'Nieznany błąd');
+        document.getElementById('proxy-error-box').style.display = '';
+      }
+    } catch(e) {
+      document.getElementById('proxy-error-box').textContent = 'Błąd połączenia z serwerem';
+      document.getElementById('proxy-error-box').style.display = '';
+    }
+    document.getElementById('proxy-spinner').style.display = 'none';
+    document.getElementById('proxy-start-btn').disabled = false;
+  }
+
+  async function stopProxy() {
+    await fetch('/api/proxy/stop', { method: 'POST' });
+    clearInterval(_proxyPollTimer);
+    document.getElementById('proxy-status-box').style.display = 'none';
+    document.getElementById('proxy-stop-btn').style.display = 'none';
+    document.getElementById('proxy-start-btn').style.display = '';
+    showToast('Serwer proxy zatrzymany');
+  }
+
+  function copyProxyUrl() {
+    const url = document.getElementById('proxy-url-display').textContent;
+    navigator.clipboard.writeText(url).then(() => showToast('Skopiowano adres proxy!'));
+  }
+
+  function _startProxyPoll() {
+    clearInterval(_proxyPollTimer);
+    _proxyPollTimer = setInterval(async () => {
+      try {
+        const d = await (await fetch('/api/proxy/status')).json();
+        if (!d.running) {
+          clearInterval(_proxyPollTimer);
+          document.getElementById('proxy-status-box').style.display = 'none';
+          document.getElementById('proxy-stop-btn').style.display = 'none';
+          document.getElementById('proxy-start-btn').style.display = '';
+          return;
+        }
+        const logBox = document.getElementById('proxy-log-box');
+        if (d.log && d.log.length) logBox.textContent = d.log.join('\n');
+      } catch {}
+    }, 2000);
+  }
+
+  // ── OBS WebSocket ──────────────────────────────────────
+  let _obsRecordTimer = null;
+
+  async function connectOBS() {
+    const host = document.getElementById('obs-host').value.trim() || 'localhost';
+    const port = parseInt(document.getElementById('obs-port').value) || 4455;
+    const password = document.getElementById('obs-password').value;
+
+    document.getElementById('obs-connect-btn').disabled = true;
+    document.getElementById('obs-status-text').textContent = 'Łączenie…';
+
+    try {
+      const r = await fetch('/api/obs/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host, port, password })
+      });
+      const d = await r.json();
+      if (d.ok) {
+        _setOBSConnected(true, `OBS v${d.obs_version}`);
+        refreshOBSScenes();
+        loadSystemFooter();
+      } else {
+        document.getElementById('obs-status-text').textContent = 'Błąd: ' + (d.error || 'Nie można połączyć');
+        showToast('Nie można połączyć z OBS: ' + (d.error || ''), true);
+      }
+    } catch { showToast('Błąd sieci', true); }
+    document.getElementById('obs-connect-btn').disabled = false;
+  }
+
+  async function disconnectOBS() {
+    await fetch('/api/obs/disconnect', { method: 'POST' });
+    _setOBSConnected(false, 'Nie połączono');
+    clearInterval(_obsRecordTimer);
+    loadSystemFooter();
+  }
+
+  function _setOBSConnected(connected, label) {
+    document.getElementById('obs-connect-btn').style.display = connected ? 'none' : '';
+    document.getElementById('obs-disconnect-btn').style.display = connected ? '' : 'none';
+    document.getElementById('obs-controls').style.display = connected ? '' : 'none';
+    document.getElementById('obs-status-text').textContent = label;
+    document.getElementById('obs-status-text').style.color = connected ? 'var(--red)' : 'var(--text-2)';
+  }
+
+  async function refreshOBSScenes() {
+    try {
+      const d = await (await fetch('/api/obs/scenes')).json();
+      const sel = document.getElementById('obs-scene-select');
+      sel.innerHTML = (d.scenes || []).map(s =>
+        `<option value="${escHtml(s.name)}" ${s.active ? 'selected' : ''}>${escHtml(s.name)}</option>`
+      ).join('');
+    } catch {}
+  }
+
+  document.getElementById('obs-scene-select')?.addEventListener('change', async function() {
+    await fetch('/api/obs/scene', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: this.value })
+    });
+  });
+
+  let _obsIsRecording = false;
+
+  async function toggleOBSRecord() {
+    const btn = document.getElementById('obs-record-btn');
+    btn.disabled = true;
+    try {
+      if (_obsIsRecording) {
+        const d = await (await fetch('/api/obs/record/stop', { method: 'POST' })).json();
+        if (d.ok) {
+          _obsIsRecording = false;
+          clearInterval(_obsRecordTimer);
+          document.getElementById('obs-timecode').textContent = '';
+          btn.textContent = '▶ Rozpocznij nagrywanie';
+          btn.style.background = '';
+          if (d.output_path) showToast('Zapisano: ' + d.output_path);
+        }
+      } else {
+        const d = await (await fetch('/api/obs/record/start', { method: 'POST' })).json();
+        if (d.ok) {
+          _obsIsRecording = true;
+          btn.textContent = '■ Zatrzymaj nagrywanie';
+          btn.style.background = 'var(--red)';
+          _obsRecordTimer = setInterval(_pollOBSRecord, 1000);
+        } else {
+          showToast('Błąd OBS: ' + (d.error || ''), true);
+        }
+      }
+    } catch { showToast('Błąd sieci', true); }
+    btn.disabled = false;
+  }
+
+  async function _pollOBSRecord() {
+    try {
+      const d = await (await fetch('/api/obs/record/status')).json();
+      _obsIsRecording = d.recording;
+      document.getElementById('obs-timecode').textContent = d.timecode || '';
+      if (!d.recording) {
+        clearInterval(_obsRecordTimer);
+        const btn = document.getElementById('obs-record-btn');
+        btn.textContent = '▶ Rozpocznij nagrywanie';
+        btn.style.background = '';
+      }
+    } catch {}
+  }
+
+  function initSettings() {
+    // Theme
+    const savedTheme = localStorage.getItem('wp-theme') || 'light';
+    document.querySelectorAll('#theme-ctrl .seg-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.v === savedTheme));
+    // Window size
+    const savedSize = localStorage.getItem('wp-window-size') || 'normal';
+    document.querySelectorAll('#size-ctrl .seg-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.v === savedSize));
+    // Font weight
+    const savedWeight = localStorage.getItem('wp-font-weight') || 'normal';
+    setFontWeight(savedWeight);
+    // Cookies browser
+    const savedCb = localStorage.getItem('wp-cookies-browser') || '';
+    document.querySelectorAll('#cookies-ctrl .seg-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.v === savedCb));
+    // Tray
+    const savedTray = localStorage.getItem('wp-tray') === '1';
+    const cb = document.getElementById('tray-check');
+    if (cb) cb.checked = savedTray;
+    // Sounds
+    const savedSounds = localStorage.getItem('wp-sounds') === '1';
+    const sc = document.getElementById('sounds-check');
+    if (sc) sc.checked = savedSounds;
+  }
+
+  initSettings();
+
+  // Enter w polu URL = pobierz
+  document.getElementById('url-input')
+    .addEventListener('keydown', e => { if (e.key === 'Enter') startDownload(); });
+
+  const dropCard = document.getElementById('drop-card');
+  ['dragenter', 'dragover'].forEach(ev => {
+    dropCard.addEventListener(ev, e => {
+      e.preventDefault();
+      dropCard.classList.add('drop-active');
+    });
+  });
+  dropCard.addEventListener('dragleave', e => {
+    if (!dropCard.contains(e.relatedTarget)) dropCard.classList.remove('drop-active');
+  });
+  dropCard.addEventListener('drop', e => {
+    e.preventDefault();
+    dropCard.classList.remove('drop-active');
+    const txt = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain') || '';
+    const u = txt.split(/\r?\n/).map(s => s.trim()).find(s => s.startsWith('http'));
+    if (u) {
+      document.getElementById('url-input').value = u;
+      showToast('Wklejono link z przeciągnięcia');
+    }
+  });
+</script>
+</body>
+</html>

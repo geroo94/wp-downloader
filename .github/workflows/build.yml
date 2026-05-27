@@ -1,0 +1,94 @@
+name: Build & Release
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Cancel any in-flight build for the same ref when a new one starts.
+# Without this, force-pushing a tag twice in a row creates colliding runs
+# that fight over the same release attachments and one of them dies at
+# "Set up job".
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── macOS ──────────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install PyTorch (CPU-only, keeps CI fast)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: pip install --prefer-binary -r requirements.txt pyinstaller
+
+      - name: Build .app
+        run: python build_app.py
+
+      - name: Package DMG
+        run: |
+          mkdir -p dist/dmg
+          cp -r "dist/WP_Downloader.app" "dist/dmg/"
+          hdiutil create \
+            -volname "WP Downloader" \
+            -srcfolder "dist/dmg" \
+            -ov -format UDZO \
+            "dist/WP_Downloader_macOS.dmg"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/WP_Downloader_macOS.dmg
+
+  # ── Windows ────────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install PyTorch (CPU-only, keeps CI fast)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller pillow
+
+      - name: Convert PNG icon to ICO
+        run: |
+          python -c "
+          from PIL import Image
+          img = Image.open('static/wp_logo.png').convert('RGBA').resize((256, 256))
+          img.save('static/wp_logo.ico')
+          "
+
+      - name: Build EXE folder
+        run: python build_app.py
+
+      - name: Package ZIP
+        run: Compress-Archive -Path dist\WP_Downloader -DestinationPath dist\WP_Downloader_Windows.zip
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/WP_Downloader_Windows.zip
