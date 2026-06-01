@@ -13,6 +13,18 @@ multiprocessing.freeze_support()  # must be called before any other code for PyI
 
 import os
 import sys
+
+# PyInstaller --noconsole on Windows sets sys.stdout / sys.stderr to None.
+# Any library that calls sys.stdout.isatty() during import then crashes —
+# uvicorn's ColourizedFormatter does exactly that on construction, which
+# kills the FastAPI worker thread before it can bind port 8765 and the
+# WebView only sees ERR_CONNECTION_REFUSED. Replace None with a real file
+# object so isatty() / write() / flush() all work as no-ops.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 import subprocess
 import urllib.request
 import zipfile

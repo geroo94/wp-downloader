@@ -79,6 +79,11 @@ class ServerThread(threading.Thread):
                 host="127.0.0.1",
                 port=PORT,
                 log_level="warning",
+                # log_config=None skips uvicorn's default ColourizedFormatter,
+                # which calls sys.stdout.isatty() during init and crashes on
+                # PyInstaller --noconsole builds where stdout is None. We have
+                # our own logging set up in main.setup_logging() anyway.
+                log_config=None,
                 loop="asyncio",
                 ws="websockets",
             )
