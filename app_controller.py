@@ -3,6 +3,7 @@ AppController — główna klasa, która spina całą aplikację.
 """
 
 import json
+import os
 import subprocess
 import sys
 import socket
@@ -114,18 +115,74 @@ class AppController:
         # 5. Poll for server readiness, then load the app
         _attempts = [0]
 
+        def _show_startup_error(reason: str, detail: str) -> None:
+            """Replace the WebView's blank chrome ERR page with a real Polish error
+               page that shows what went wrong + the log path the user can paste."""
+            import html as _html
+            import sys as _sys
+            log_dir = os.path.dirname(os.path.abspath(
+                _sys.executable if hasattr(_sys, '_MEIPASS') else __file__))
+            log_path = os.path.join(log_dir, "wp_downloader_debug.log")
+            page = f"""<!doctype html><html lang="pl"><head><meta charset="utf-8">
+<title>WP Downloader — błąd uruchamiania</title>
+<style>
+  body {{font:14px/1.5 -apple-system,Segoe UI,system-ui,sans-serif;background:#FBFBFA;color:#111;
+        padding:36px;max-width:760px;margin:0 auto}}
+  h1 {{font-size:20px;color:#E3000F;margin:0 0 8px;letter-spacing:-.02em}}
+  h2 {{font-size:13px;color:#555;margin:24px 0 6px;text-transform:uppercase;letter-spacing:.06em}}
+  pre {{background:#F0F0EC;border:1px solid #EAEAEA;border-radius:8px;padding:14px 16px;
+        white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.5}}
+  ul {{padding-left:18px}} li {{margin:4px 0}}
+  code {{background:#F0F0EC;padding:1px 6px;border-radius:4px;font-size:12px}}
+</style></head><body>
+  <h1>Serwer aplikacji nie wystartował.</h1>
+  <p>{_html.escape(reason)} Aplikacja zostawiła pełny ślad błędu w pliku logu — wklej go zgłaszając problem.</p>
+  <h2>Szczegóły</h2>
+  <pre>{_html.escape(detail or "(brak szczegółów — sprawdź log poniżej)")}</pre>
+  <h2>Plik logu</h2>
+  <pre>{_html.escape(log_path)}</pre>
+  <h2>Co możesz spróbować</h2>
+  <ul>
+    <li>Zamknij i uruchom aplikację ponownie.</li>
+    <li>Sprawdź czy zapora / antywirus nie blokuje portu <code>127.0.0.1:8765</code>.</li>
+    <li>Jeśli to powtarzający się błąd — wyślij plik logu (ścieżka wyżej).</li>
+  </ul>
+</body></html>"""
+            try:
+                self.main_window.web_view.setHtml(page)
+            except Exception:
+                # Last resort if even setHtml is unavailable
+                logger.error("Nie można pokazać strony błędu w WebView")
+
         def poll_server():
             _attempts[0] += 1
             if _server_ready():
                 status_timer.stop()
                 self.main_window.load_app()
                 logger.info("Serwer gotowy po ~%d ms od startu", _attempts[0] * 100)
-            elif _attempts[0] < 100:   # max ~10 s
+                return
+            # Server thread died early? Surface the cause now instead of waiting
+            # out the full 10 s timeout.
+            err = getattr(self.server_thread, "startup_error", None)
+            if err or not self.server_thread.is_alive():
+                status_timer.stop()
+                detail = err or "Wątek serwera zakończył się bez komunikatu."
+                logger.error("Wątek serwera nie żyje: %s", detail)
+                _show_startup_error(
+                    "Komponent serwera lokalnego wywalił się podczas startu.",
+                    detail,
+                )
+                return
+            if _attempts[0] < 100:   # max ~10 s
                 QTimer.singleShot(100, poll_server)
             else:
                 status_timer.stop()
-                self.main_window.load_app()
-                logger.warning("Timeout oczekiwania na serwer — ładowanie mimo to")
+                logger.warning("Timeout oczekiwania na serwer (10 s) — pokazuję stronę błędu")
+                _show_startup_error(
+                    "Serwer nie odpowiedział w ciągu 10 sekund.",
+                    "Wątek serwera nadal żyje, ale port 8765 nie zwraca odpowiedzi. "
+                    "Możliwe że uvicorn utknął na imporcie modułu albo port jest zajęty.",
+                )
 
         QTimer.singleShot(150, poll_server)
 

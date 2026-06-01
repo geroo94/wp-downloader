@@ -12,6 +12,7 @@ Oboje pracują jednocześnie, ale na różnych zadaniach.
 
 import threading
 import asyncio
+import logging
 import sys
 
 import uvicorn
@@ -28,6 +29,8 @@ except ImportError:
 
 from download_manager import DownloadManager
 from server import create_app
+
+logger = logging.getLogger(__name__)
 
 PORT = 8765  # port na którym nasłuchuje serwer (localhost:8765)
 
@@ -47,34 +50,48 @@ class ServerThread(threading.Thread):
         self.manager = manager
         self.loop = None    # pętla asyncio dla tego wątku
         self.server = None  # instancja uvicorn.Server
+        self.startup_error: str | None = None  # filled if run() dies before serving
 
     def run(self):
         """
         Ta metoda jest wywołana gdy wątek startuje (.start()).
         Tworzy nową pętlę asyncio i uruchamia w niej serwer.
+
+        WSZYSTKO musi być pod try/except — daemon thread bez handlera
+        umiera CICHO i WebView dostaje ERR_CONNECTION_REFUSED bez śladu
+        w logu. Każdy import / błąd portu / wyjątek z create_app() lub
+        uvicorn.serve() musi tu się zalogować, inaczej diagnoza jest
+        niemożliwa.
         """
-        # Każdy wątek potrzebuje własnej pętli asyncio
-        # (główny wątek ma swoją, ten wątek ma swoją)
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
+        try:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
 
-        # Stwórz aplikację FastAPI
-        app = create_app(self.manager)
+            try:
+                app = create_app(self.manager)
+            except Exception as exc:
+                self.startup_error = f"create_app() failed: {exc!r}"
+                logger.exception("ServerThread: create_app() raised — server NIE wystartuje")
+                return
 
-        # Konfiguracja uvicorn (serwer HTTP)
-        config = uvicorn.Config(
-            app=app,
-            host="127.0.0.1",   # tylko lokalnie, nie wystawiamy na internet
-            port=PORT,
-            log_level="warning",  # nie zaśmiecaj konsoli
-            loop="asyncio",
-            ws="websockets",  # jawny backend WS (nie „auto” w wątku z własną pętlą)
-        )
+            config = uvicorn.Config(
+                app=app,
+                host="127.0.0.1",
+                port=PORT,
+                log_level="warning",
+                loop="asyncio",
+                ws="websockets",
+            )
+            self.server = uvicorn.Server(config)
 
-        self.server = uvicorn.Server(config)
-
-        # Uruchom serwer (blokuje ten wątek — to ok, działa w tle)
-        self.loop.run_until_complete(self.server.serve())
+            try:
+                self.loop.run_until_complete(self.server.serve())
+            except Exception as exc:
+                self.startup_error = f"uvicorn.serve() failed: {exc!r}"
+                logger.exception("ServerThread: uvicorn.serve() raised")
+        except BaseException as exc:
+            self.startup_error = f"run() crashed: {exc!r}"
+            logger.exception("ServerThread: fatal crash in run()")
 
     def stop(self):
         """Zatrzymuje serwer i pętlę asyncio."""
