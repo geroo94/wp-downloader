@@ -42,9 +42,35 @@ def _detect_js_runtime() -> dict:
 _AUDIO_EXTS = {".m4a", ".aac", ".opus", ".ogg", ".flac", ".mp3"}
 
 
-def _cookies_opt(browser: str = "") -> dict:
+def _cookies_opt(browser: str = "", file: str = "") -> dict:
+    """yt-dlp opts dla źródła ciasteczek.
+
+    Priorytet: jawny plik ``.txt`` (jeśli istnieje na dysku) → ``cookiefile``.
+    Inaczej nazwa przeglądarki → ``cookiesfrombrowser`` (czyta natywną bazę
+    SQLite, co czasem zawodzi gdy przeglądarka trzyma plik zalockowany —
+    patrz ``_classify_cookie_error``).
+    """
+    f = (file or "").strip()
+    if f and os.path.isfile(f):
+        return {"cookiefile": f}
     b = browser.strip() or (os.environ.get("WP_DOWNLOADER_COOKIES_BROWSER") or "").strip()
     return {"cookiesfrombrowser": (b,)} if b else {}
+
+
+def _classify_cookie_error(msg: str) -> str | None:
+    """Wykryj typowy błąd kopiowania bazy ciasteczek z przeglądarki i zwróć
+    przyjazny polski komunikat z instrukcją. Trafia w przypadek Windows + otwarty
+    Chrome (``PermissionError: ...Cookies``) oraz yt-dlp 'Could not copy Chrome
+    cookie database' bez względu na platformę.
+    """
+    lower = (msg or "").lower()
+    if (("could not copy" in lower and "cookie" in lower)
+            or ("permissionerror" in lower and "cookies" in lower)):
+        return ("Nie można uzyskać dostępu do ciasteczek przeglądarki — "
+                "plik jest zablokowany przez działającą instancję przeglądarki. "
+                "Zamknij Chrome (lub wybraną przeglądarkę) i spróbuj ponownie, "
+                "albo w Ustawieniach wskaż plik cookies.txt jako źródło ciasteczek.")
+    return None
 
 
 def _format_bytes(n: int) -> str:
@@ -282,8 +308,12 @@ class YtDlpWorker:
         elif error_holder:
             raw_err = error_holder[0]
             import re as _re
-            clean_err = _re.sub(r'\x1b\[[0-9;]*[mGKH]', '', raw_err)
-            clean_err = _re.sub(r'^ERROR:\s*\[[\w:]+\]\s*[\w]+:\s*', '', clean_err).strip()
+            friendly = _classify_cookie_error(raw_err)
+            if friendly:
+                clean_err = friendly
+            else:
+                clean_err = _re.sub(r'\x1b\[[0-9;]*[mGKH]', '', raw_err)
+                clean_err = _re.sub(r'^ERROR:\s*\[[\w:]+\]\s*[\w]+:\s*', '', clean_err).strip()
             logger.error("yt-dlp błąd dla zadania %s: %s", task.task_id, clean_err)
             diag = [l for l in _ydl_log_lines if any(kw in l.lower() for kw in _DIAG_KW)]
             if diag:
@@ -377,7 +407,10 @@ class YtDlpWorker:
         # m4a audio) and records from the start of the broadcast — exactly
         # the CLI command from the user's tutorial.
         if not is_youtube_live:
-            opts.update(_cookies_opt(task.cookies_browser))
+            opts.update(_cookies_opt(
+                getattr(task, "cookies_browser", ""),
+                getattr(task, "cookies_file", ""),
+            ))
         # Regular downloads (POBIERANIE) keep the Deno / EJS runtime that the
         # YouTube n-challenge solver needs.
         if not task.live_record:

@@ -23,6 +23,7 @@ class DownloadTask:
     live_status: str = ""
     transcription: str = ""  # "" = not started, "in_progress", path = done, "error"
     cookies_browser: str = ""  # "chrome" / "firefox" / "safari" / "edge" / ""
+    cookies_file: str = ""  # ścieżka do wyeksportowanego cookies.txt (priorytet nad browser)
     speed_str: str = ""
 
 
@@ -97,7 +98,7 @@ class DownloadManager:
         self.tasks = new_tasks
         await self.broadcast({"type": "reorder_success"})
 
-    def add_task(self, url: str, format_id: str, quality: str, output_path: str = "", live_record: bool = False, cookies_browser: str = "", wait_for_video: bool = False) -> str:
+    def add_task(self, url: str, format_id: str, quality: str, output_path: str = "", live_record: bool = False, cookies_browser: str = "", cookies_file: str = "", wait_for_video: bool = False) -> str:
         task_id = str(uuid.uuid4())[:8]
         task = DownloadTask(
             task_id=task_id,
@@ -107,6 +108,7 @@ class DownloadManager:
             output_path=(output_path or "").strip(),
             live_record=live_record,
             cookies_browser=cookies_browser,
+            cookies_file=cookies_file,
             wait_for_video=wait_for_video,
         )
         self.tasks[task_id] = task

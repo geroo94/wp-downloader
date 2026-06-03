@@ -46,6 +46,7 @@ class DownloadRequest(BaseModel):
     output_path: str = ""
     live_record: bool = False
     cookies_browser: str = ""  # "chrome" / "firefox" / "safari" / "edge" / ""
+    cookies_file: str = ""     # ścieżka do wyeksportowanego cookies.txt (priorytet nad browser)
     wait_for_video: bool = False  # --wait-for-video for scheduled live streams
     # Nowe pola inspirowane OBS
     add_watermark: bool = False
@@ -341,16 +342,16 @@ def create_app(manager: DownloadManager) -> FastAPI:
     @app.get("/api/logs")
     async def get_logs(lines: int = 500):
         """Zwraca ostatnie N linii pliku logu jako plain text."""
-        import sys as _sys
-        log_dir = os.path.dirname(os.path.abspath(_sys.executable if hasattr(_sys, '_MEIPASS') else __file__))
-        log_path = os.path.join(log_dir, "wp_downloader_debug.log")
+        log_path = os.environ.get("WP_DOWNLOADER_LOG_PATH", "")
+        if not log_path:
+            return PlainTextResponse("(ścieżka logu nieustawiona)")
         try:
             with open(log_path, encoding="utf-8", errors="replace") as f:
                 all_lines = f.readlines()
             tail = "".join(all_lines[-lines:])
             return PlainTextResponse(tail)
         except FileNotFoundError:
-            return PlainTextResponse("(plik logu nie istnieje)")
+            return PlainTextResponse(f"(plik logu nie istnieje: {log_path})")
         except Exception as e:
             return PlainTextResponse(f"(błąd odczytu: {e})")
 
@@ -507,22 +508,50 @@ def create_app(manager: DownloadManager) -> FastAPI:
 
     @app.post("/api/tasks/{task_id}/reveal")
     async def reveal_task_file(task_id: str):
-        """Opens the file location in Finder (macOS) or Explorer (Windows)."""
+        """Otwiera lokalizację pliku w Finderze (macOS) / Eksploratorze (Windows)
+        z plikiem **zaznaczonym**. Jeżeli plik zniknął (np. user go usunął albo
+        ścieżka po merge ffmpegu uległa zmianie), otwiera sam folder zamiast
+        wysyłać `open -R` na nieistniejący plik (co na macOS jest no-op'em)."""
         task = manager.tasks.get(task_id)
         if not task:
             return JSONResponse({"error": "Zadanie nie istnieje"}, status_code=404)
-        if not task.output_path:
+
+        # Strip whitespace — czasem `output_path` po merge ffmpegu ma trailing
+        # spację (zwłaszcza w title-fallback outtmpl).
+        path = (task.output_path or "").strip()
+        if not path:
             return JSONResponse({"error": "Brak ścieżki pliku"}, status_code=404)
-        path = task.output_path
+
+        file_exists = os.path.exists(path)
+        parent = os.path.dirname(path)
+        fallback = False
         try:
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", "-R", path])
-            elif sys.platform == "win32":
-                subprocess.Popen(["explorer", "/select,", path])
+            if file_exists:
+                if sys.platform == "darwin":
+                    cmd = ["open", "-R", path]
+                elif sys.platform == "win32":
+                    cmd = ["explorer", "/select,", path]
+                else:
+                    cmd = ["xdg-open", parent or path]
             else:
-                subprocess.Popen(["xdg-open", os.path.dirname(path)])
-            return JSONResponse({"ok": True})
+                fallback = True
+                target_dir = parent if (parent and os.path.isdir(parent)) else None
+                if not target_dir:
+                    return JSONResponse(
+                        {"error": "Plik nie istnieje, folder też nie."},
+                        status_code=404,
+                    )
+                if sys.platform == "darwin":
+                    cmd = ["open", target_dir]
+                elif sys.platform == "win32":
+                    cmd = ["explorer", target_dir]
+                else:
+                    cmd = ["xdg-open", target_dir]
+            subprocess.Popen(cmd)
+            logger.info("reveal: cmd=%r exists=%s fallback=%s", cmd, file_exists, fallback)
+            return JSONResponse({"ok": True, "fallback": "directory_only" if fallback else None})
         except Exception as e:
+            logger.warning("reveal: subprocess failed: %s (path=%r)", e, path)
             return JSONResponse({"error": str(e)}, status_code=500)
 
     @app.post("/api/download")
@@ -546,6 +575,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 output_path=req.output_path,
                 live_record=req.live_record,
                 cookies_browser=req.cookies_browser,
+                cookies_file=req.cookies_file,
                 wait_for_video=req.wait_for_video,
             )
         except Exception as exc:
@@ -560,16 +590,20 @@ def create_app(manager: DownloadManager) -> FastAPI:
         })
 
     @app.get("/api/formats")
-    async def get_formats(url: str, cookies_browser: str = ""):
+    async def get_formats(url: str, cookies_browser: str = "", cookies_file: str = ""):
         """Pobiera dostępne formaty dla podanego URL używając yt-dlp API."""
         from yt_dlp import YoutubeDL
         import yt_dlp.utils as _ydl_utils
 
         try:
             extra: dict = {}
-            _cfb = cookies_browser.strip() or (os.environ.get("WP_DOWNLOADER_COOKIES_BROWSER") or "").strip()
-            if _cfb:
-                extra["cookiesfrombrowser"] = (_cfb,)
+            _cff = (cookies_file or "").strip()
+            if _cff and os.path.isfile(_cff):
+                extra["cookiefile"] = _cff
+            else:
+                _cfb = cookies_browser.strip() or (os.environ.get("WP_DOWNLOADER_COOKIES_BROWSER") or "").strip()
+                if _cfb:
+                    extra["cookiesfrombrowser"] = (_cfb,)
 
             # Capture yt-dlp log messages for richer error context
             _ydl_messages: list[str] = []

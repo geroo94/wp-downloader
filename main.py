@@ -86,21 +86,82 @@ def setup_overlay_site_packages():
         sys.path.insert(0, overlay)
 
 
-def setup_logging():
-    """Konfiguruje logowanie do pliku tekstowego."""
-    # Określamy ścieżkę do logu (obok pliku EXE lub skryptu)
-    log_dir = os.path.dirname(os.path.abspath(sys.executable if hasattr(sys, '_MEIPASS') else __file__))
-    log_path = os.path.join(log_dir, "wp_downloader_debug.log")
-    
+def get_logs_dir() -> str:
+    """Returns the user-data `logs/` directory and creates it on first call.
+
+    Lives outside the .app bundle / install directory so it survives
+    auto-update (which replaces the bundle wholesale on macOS) and so the
+    install directory can stay read-only.
+
+      macOS   → ~/Library/Logs/WP_Downloader/
+      Windows → %APPDATA%/WP_Downloader/logs/
+      Linux   → ~/.local/share/wp_downloader/logs/
+
+    Falls back to placing logs next to the EXE if the user-data path can't
+    be created (e.g. weird permissions, sandboxing).
+    """
+    import platform as _platform
+    home = os.path.expanduser("~")
+    sysname = _platform.system()
+    if sysname == "Darwin":
+        candidate = os.path.join(home, "Library", "Logs", "WP_Downloader")
+    elif sysname == "Windows":
+        candidate = os.path.join(
+            os.environ.get("APPDATA", home), "WP_Downloader", "logs")
+    else:
+        candidate = os.path.join(home, ".local", "share", "wp_downloader", "logs")
+    try:
+        os.makedirs(candidate, exist_ok=True)
+        return candidate
+    except OSError:
+        base_dir = os.path.dirname(os.path.abspath(
+            sys.executable if hasattr(sys, '_MEIPASS') else __file__))
+        fallback = os.path.join(base_dir, "logs")
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
+
+
+def _rotate_old_logs(log_dir: str, keep: int = 20) -> None:
+    """Keep only the N most recent log files in log_dir; delete the rest."""
+    try:
+        files = [os.path.join(log_dir, f) for f in os.listdir(log_dir)
+                 if f.startswith("wp_downloader_") and f.endswith(".log")]
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for old in files[keep:]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def setup_logging() -> str:
+    """Konfiguruje logowanie do pliku tekstowego.
+
+    Każde uruchomienie tworzy nowy plik `wp_downloader_YYYYMMDD_HHMMSS.log`
+    w platformowo poprawnym folderze (poza bundle / install dir, żeby
+    przeżył auto-update i nie wymagał write w Program Files). Trzymamy
+    ostatnie 20 plików.
+    """
+    from datetime import datetime
+    log_dir = get_logs_dir()
+    _rotate_old_logs(log_dir)
+    log_filename = f"wp_downloader_{datetime.now():%Y%m%d_%H%M%S}.log"
+    log_path = os.path.join(log_dir, log_filename)
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
         handlers=[
-            logging.FileHandler(log_path, encoding='utf-8', mode='a'),
-            logging.StreamHandler(sys.stdout)
-        ]
+            logging.FileHandler(log_path, encoding='utf-8', mode='w'),
+            logging.StreamHandler(sys.stdout),
+        ],
     )
     logging.info("=== Uruchomienie WP Downloader ===")
+    logging.info("Log file: %s", log_path)
+    os.environ["WP_DOWNLOADER_LOG_PATH"] = log_path
+    return log_path
 
 def add_local_bin_to_path():
     """Szuka php.exe i innych binariów w folderze aplikacji i dodaje je do PATH procesu."""

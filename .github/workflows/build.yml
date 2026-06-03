@@ -110,13 +110,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller pillow
 
-      - name: Convert PNG icon to ICO
+      # Multi-res ICO (16/32/48/64/128/256) — Inno Setup używa najmniejszej
+      # wersji do icon overlay w menu Start, większych do "Add/Remove Programs".
+      - name: Build multi-res ICO
         run: |
-          python -c "
-          from PIL import Image
-          img = Image.open('static/wp_logo.png').convert('RGBA').resize((256, 256))
-          img.save('static/wp_logo.ico')
-          "
+          python -c "from PIL import Image; img = Image.open('static/wp_logo.png').convert('RGBA'); img.save('static/wp_logo.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
 
       - name: Build EXE folder
         run: python build_app.py
@@ -124,7 +122,21 @@ jobs:
       - name: Package ZIP
         run: Compress-Archive -Path dist\WP_Downloader -DestinationPath dist\WP_Downloader_Windows.zip
 
+      # Inno Setup installer: instaluje do %LOCALAPPDATA%\Programs\WP_Downloader\
+      # (user-scope, bez UAC), ikona w menu Start, opcjonalnie pulpit.
+      # SmartScreen wciąż ostrzega na pierwszym uruchomieniu (brak EV cert),
+      # ale logi siedzą już w %APPDATA%\WP_Downloader\logs\ — install dir
+      # może być read-only.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build\installer.iss'
+        shell: cmd
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/WP_Downloader_Windows.zip
+          files: |
+            dist/WP_Downloader_Windows.zip
+            Output/WP_Downloader_Setup.exe

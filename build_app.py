@@ -32,7 +32,6 @@ def run_build():
         '--collect-all=yt_dlp',     # Silnik pobierania
         '--collect-all=pip',        # Mechanizm aktualizacji
         '--collect-all=PyQt6',      # Interfejs graficzny
-        '--collect-all=weasyprint',
         '--collect-all=streamlink', # Pobieranie live streamów (Facebook)
         '--collect-all=whisper',    # Transkrypcja audio (Whisper)
         '--osx-bundle-identifier=com.geroo94.wpdownloader',

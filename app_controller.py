@@ -1,38 +1,71 @@
 """
 AppController — główna klasa, która spina całą aplikację.
+
+Sekwencja startu (single-window):
+    1. Pokaż ``MainWindow`` od razu (1080×780, 100 % opacity). Jego central
+       widget to ``QStackedLayout(StackAll)`` z ``QWebEngineView`` (pustym) i
+       ``LoadingOverlay`` na wierzchu. User od pierwszej klatki widzi widok
+       ładowania: duże logo, „WP Downloader", duży pasek postępu, status.
+    2. Wystartuj wątek serwera FastAPI + wątek dep-checków.
+    3. Workerowy ``LoadingProgress`` emituje (percent, text) na każdym
+       kamieniu milowym; slot ``_on_progress`` aktualizuje overlay.
+    4. Gdy serwer odpowiada → ``main_window.load_app()`` (WebView ładuje
+       localhost; body w index.html ma opacity 0 — niewidoczne pod overlay'em).
+    5. JS po połączeniu WS woła ``wpBridge.notify_ui_ready()`` → sygnał
+       ``ui_ready`` → overlay dochodzi do 100 %, pasek zielenieje 250 ms.
+    6. Po 300 ms pauzie ``overlay.start_fade_out()`` (350 ms, InCubic, przez
+       QGraphicsOpacityEffect).
+    7. Po ``overlay.finished`` woła ``main_window.start_main_ui_fade_in()`` —
+       JS dodaje klasę `ready` do <body>, CSS transition opacity 0→1 (450 ms).
+    8. Error path: ``overlay.force_hide()`` + ``setHtml(error_page)`` w WebView,
+       okno cały czas widoczne na 100 %. Tak samo dla 12 s safety net.
 """
 
-import json
+import logging
 import os
+import socket
 import subprocess
 import sys
-import socket
-import logging
 import threading
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QTimer
 
-from server_thread import ServerThread, PORT
+from PyQt6.QtCore import (
+    QObject,
+    Qt,
+    QTimer,
+    pyqtSignal,
+)
+from PyQt6.QtWidgets import QApplication
+
 from download_manager import DownloadManager
 from main_window import MainWindow
+from server_thread import PORT, ServerThread
 
 logger = logging.getLogger(__name__)
 
 
-def _check_and_install_deps(status_cb) -> None:
-    """
-    Run dependency checks in a background thread; calls status_cb(msg) for each step.
-    Missing pip packages are installed automatically.
-    """
+class LoadingProgress(QObject):
+    """Cross-thread bus: workerzy emitują ``progress`` (percent, text);
+    slot w ``AppController`` odbiera przez ``QueuedConnection`` (auto-wybór
+    bo emitter na innym wątku) i aktualizuje overlay."""
+
+    progress = pyqtSignal(int, str)
+
+
+def _check_and_install_deps(progress: LoadingProgress) -> None:
+    """Sprawdza zależności w wątku tła, raportuje przez sygnał ``progress``.
+    Próbuje doinstalować pip-em brakujące."""
     import shutil
 
     pip_pkgs = [("yt-dlp", "yt_dlp"), ("streamlink", "streamlink")]
-    for pkg_name, import_name in pip_pkgs:
-        status_cb(f"Sprawdzanie {pkg_name}…")
+    n = len(pip_pkgs)
+    for i, (pkg_name, import_name) in enumerate(pip_pkgs):
+        # Skala: 10 % start → 50 % po wszystkich pakietach.
+        pct = 10 + int((i / n) * 40)
+        progress.progress.emit(pct, f"Sprawdzanie {pkg_name}…")
         try:
             __import__(import_name)
         except ImportError:
-            status_cb(f"Instalowanie {pkg_name}…")
+            progress.progress.emit(pct, f"Instalowanie {pkg_name}…")
             try:
                 subprocess.run(
                     [sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir", pkg_name],
@@ -42,11 +75,9 @@ def _check_and_install_deps(status_cb) -> None:
             except Exception as exc:
                 logger.warning("Auto-install %s failed: %s", pkg_name, exc)
 
-    status_cb("Sprawdzanie ffmpeg…")
+    progress.progress.emit(55, "Sprawdzanie ffmpeg…")
     if not shutil.which("ffmpeg"):
         logger.warning("ffmpeg not found in PATH")
-
-    status_cb("Uruchamianie serwera…")
 
 
 def _server_ready() -> bool:
@@ -68,62 +99,80 @@ class AppController:
         self.server_thread = ServerThread(self.download_manager)
         self.main_window = MainWindow(self.qt_app, self.download_manager)
 
-        # Latest status message from the dep-check thread; read from the main thread via QTimer.
-        self._loading_status: str = "Uruchamianie…"
-        self._loading_lock = threading.Lock()
+        # Loading overlay siedzi w stacku central widgetu main_window i kryje
+        # WebView dopóki UI się nie załaduje. Alias dla czytelności.
+        self.overlay = self.main_window.loading_overlay
 
-    def _set_loading_status(self, msg: str) -> None:
-        """Thread-safe write of the loading status (called from background thread)."""
-        with self._loading_lock:
-            self._loading_status = msg
-
-    def _get_loading_status(self) -> str:
-        with self._loading_lock:
-            return self._loading_status
-
-    def run(self):
-        logger.info("Inicjalizacja komponentów aplikacji...")
-
-        # 1. Show the window immediately with loading screen
-        self.main_window.show_loading()
-        self.main_window.show()
-
-        # 2. Start FastAPI server immediately — don't wait for dep checks
-        self.server_thread.start()
-
-        # 3. Run dep checks in pure background (status-only; never blocks server start)
-        dep_thread = threading.Thread(
-            target=_check_and_install_deps,
-            args=(self._set_loading_status,),
-            daemon=True,
+        # Progres workerów → overlay
+        self._progress_bus = LoadingProgress()
+        self._progress_bus.progress.connect(
+            self._on_progress, type=Qt.ConnectionType.QueuedConnection
         )
-        dep_thread.start()
 
-        # 4. Push loading status to HTML every 200 ms while loading screen is visible
-        status_timer = QTimer()
+        # Bridge JS → Qt: WS init oznacza „interfejs gotowy"
+        self.main_window.bridge.ui_ready.connect(self._on_ui_ready)
 
-        def sync_loading_text():
-            msg = self._get_loading_status()
-            self.main_window.web_view.page().runJavaScript(
-                f"updateStatus({json.dumps(msg)});"
-            )
+        # Atrybuty trzymane żeby Qt nie zebrał animacji i timerów przez GC.
+        self._poll_attempts = 0
+        self._poll_timer: QTimer | None = None
+        self._safety_net_timer: QTimer | None = None
+        self._startup_error_shown = False
+        self._ui_ready_handled = False
 
-        status_timer.setInterval(200)
-        status_timer.timeout.connect(sync_loading_text)
-        status_timer.start()
+    # ── slots ────────────────────────────────────────────────────────────
 
-        # 5. Poll for server readiness, then load the app
-        _attempts = [0]
+    def _on_progress(self, percent: int, text: str) -> None:
+        """Slot: aktualizuje overlay. Działa na głównym wątku (QueuedConnection)."""
+        if self.overlay is None:
+            return
+        self.overlay.set_progress(percent)
+        if text:
+            self.overlay.set_status(text)
+            logger.info("loading %d%%: %s", percent, text)
 
-        def _show_startup_error(reason: str, detail: str) -> None:
-            """Replace the WebView's blank chrome ERR page with a real Polish error
-               page that shows what went wrong + the log path the user can paste."""
-            import html as _html
-            import sys as _sys
-            log_dir = os.path.dirname(os.path.abspath(
-                _sys.executable if hasattr(_sys, '_MEIPASS') else __file__))
-            log_path = os.path.join(log_dir, "wp_downloader_debug.log")
-            page = f"""<!doctype html><html lang="pl"><head><meta charset="utf-8">
+    def _on_ui_ready(self) -> None:
+        """JS poinformował że interfejs się załadował (WS init przyszedł).
+        Skacze do 100 %, czeka 300 ms żeby user zobaczył zielony pasek,
+        potem fade-out overlay'a."""
+        if self._ui_ready_handled or self._startup_error_shown:
+            return
+        self._ui_ready_handled = True
+        if self._safety_net_timer is not None:
+            self._safety_net_timer.stop()
+        self._progress_bus.progress.emit(100, "Gotowe")
+        QTimer.singleShot(300, self._start_overlay_fade_out)
+
+    def _start_overlay_fade_out(self) -> None:
+        if self.overlay is None or self._startup_error_shown:
+            return
+        self.overlay.finished.connect(self._after_overlay_fade_out)
+        self.overlay.start_fade_out(350)
+
+    def _after_overlay_fade_out(self) -> None:
+        """Overlay zakończył fade-out (jest już ukryty). Każ JS dorzucić klasę
+        `ready` do <body> — odpala się CSS transition opacity 0→1 i docelowy
+        interfejs wyłania się w tym samym miejscu. Po ~600 ms zwalniamy overlay."""
+        self.main_window.start_main_ui_fade_in()
+        # Zwolnij overlay z pamięci dopiero gdy CSS transition się skończy,
+        # żeby Qt nie zaczął niczego repaintować w trakcie animacji JS.
+        overlay = self.overlay
+        if overlay is not None:
+            self.overlay = None
+            QTimer.singleShot(600, overlay.deleteLater)
+
+    # ── error path ───────────────────────────────────────────────────────
+
+    def _show_startup_error(self, reason: str, detail: str) -> None:
+        """Awaryjnie ukrywa overlay i pokazuje stronę błędu w WebView.
+        Główne okno cały czas widoczne na 100 % opacity — wystarczy odsłonić
+        WebView spod overlay'a."""
+        if self._startup_error_shown:
+            return
+        self._startup_error_shown = True
+
+        import html as _html
+        log_path = os.environ.get("WP_DOWNLOADER_LOG_PATH", "(brak)")
+        page = f"""<!doctype html><html lang="pl"><head><meta charset="utf-8">
 <title>WP Downloader — błąd uruchamiania</title>
 <style>
   body {{font:14px/1.5 -apple-system,Segoe UI,system-ui,sans-serif;background:#FBFBFA;color:#111;
@@ -148,44 +197,104 @@ class AppController:
     <li>Jeśli to powtarzający się błąd — wyślij plik logu (ścieżka wyżej).</li>
   </ul>
 </body></html>"""
+        # Awaryjnie ukryj overlay żeby WebView spod niego stał się widoczny.
+        if self.overlay is not None:
             try:
-                self.main_window.web_view.setHtml(page)
+                self.overlay.force_hide()
             except Exception:
-                # Last resort if even setHtml is unavailable
-                logger.error("Nie można pokazać strony błędu w WebView")
+                pass
+            self.overlay = None
+        self.main_window.raise_()
+        self.main_window.activateWindow()
+        try:
+            self.main_window.web_view.setHtml(page)
+        except Exception:
+            logger.error("Nie można pokazać strony błędu w WebView")
 
-        def poll_server():
-            _attempts[0] += 1
-            if _server_ready():
-                status_timer.stop()
-                self.main_window.load_app()
-                logger.info("Serwer gotowy po ~%d ms od startu", _attempts[0] * 100)
-                return
-            # Server thread died early? Surface the cause now instead of waiting
-            # out the full 10 s timeout.
-            err = getattr(self.server_thread, "startup_error", None)
-            if err or not self.server_thread.is_alive():
-                status_timer.stop()
-                detail = err or "Wątek serwera zakończył się bez komunikatu."
-                logger.error("Wątek serwera nie żyje: %s", detail)
-                _show_startup_error(
-                    "Komponent serwera lokalnego wywalił się podczas startu.",
-                    detail,
-                )
-                return
-            if _attempts[0] < 100:   # max ~10 s
-                QTimer.singleShot(100, poll_server)
-            else:
-                status_timer.stop()
-                logger.warning("Timeout oczekiwania na serwer (10 s) — pokazuję stronę błędu")
-                _show_startup_error(
-                    "Serwer nie odpowiedział w ciągu 10 sekund.",
-                    "Wątek serwera nadal żyje, ale port 8765 nie zwraca odpowiedzi. "
-                    "Możliwe że uvicorn utknął na imporcie modułu albo port jest zajęty.",
-                )
+    # ── start ────────────────────────────────────────────────────────────
 
-        QTimer.singleShot(150, poll_server)
+    def run(self):
+        logger.info("Inicjalizacja komponentów aplikacji...")
+
+        # 1. Pokaż główne okno od razu (100 % opacity). Overlay jest częścią
+        #    central widgetu i kryje WebView — user widzi widok ładowania.
+        self.main_window.show()
+        self.main_window.raise_()
+        self.main_window.activateWindow()
+        self._progress_bus.progress.emit(10, "Inicjalizacja komponentów…")
+
+        # 2. Server thread + dep-check thread odpalają się równolegle.
+        self.server_thread.start()
+        threading.Thread(
+            target=_check_and_install_deps,
+            args=(self._progress_bus,),
+            daemon=True,
+        ).start()
+
+        # 3. WebView reportuje „strona załadowana" → 90 %.
+        self.main_window.web_view.loadFinished.connect(self._on_load_finished)
+
+        # 4. Polling 100 ms × max 100 = ~10 s na start serwera.
+        self._poll_timer = QTimer(self.main_window)
+        self._poll_timer.setInterval(100)
+        self._poll_timer.timeout.connect(self._poll_server)
+        QTimer.singleShot(150, self._poll_timer.start)
 
         exit_code = self.qt_app.exec()
         self.server_thread.stop()
         sys.exit(exit_code)
+
+    def _poll_server(self) -> None:
+        self._poll_attempts += 1
+        if _server_ready():
+            self._poll_timer.stop()
+            logger.info("Serwer gotowy po ~%d ms od startu", self._poll_attempts * 100)
+            self._progress_bus.progress.emit(80, "Łączenie z serwerem…")
+            self.main_window.load_app()
+            # Safety net: jeśli `notify_ui_ready` nie nadejdzie w 12 s
+            # (np. JS error w connectWS), forsujemy fade-out tak czy siak.
+            self._safety_net_timer = QTimer(self.main_window)
+            self._safety_net_timer.setSingleShot(True)
+            self._safety_net_timer.setInterval(12_000)
+            self._safety_net_timer.timeout.connect(self._on_safety_net)
+            self._safety_net_timer.start()
+            return
+
+        # Server thread padł zanim port się otworzył?
+        err = getattr(self.server_thread, "startup_error", None)
+        if err or not self.server_thread.is_alive():
+            self._poll_timer.stop()
+            detail = err or "Wątek serwera zakończył się bez komunikatu."
+            logger.error("Wątek serwera nie żyje: %s", detail)
+            self._show_startup_error(
+                "Komponent serwera lokalnego wywalił się podczas startu.",
+                detail,
+            )
+            return
+
+        if self._poll_attempts >= 100:   # ~10 s
+            self._poll_timer.stop()
+            logger.warning("Timeout oczekiwania na serwer (10 s) — pokazuję stronę błędu")
+            self._show_startup_error(
+                "Serwer nie odpowiedział w ciągu 10 sekund.",
+                "Wątek serwera nadal żyje, ale port 8765 nie zwraca odpowiedzi. "
+                "Możliwe że uvicorn utknął na imporcie modułu albo port jest zajęty.",
+            )
+
+    def _on_load_finished(self, ok: bool) -> None:
+        """QWebEngineView załadował stronę (HTML, CSS, JS). Brakuje już tylko
+        wiadomości WS init żeby uznać UI za gotowe — to 90 %."""
+        if self._ui_ready_handled or self._startup_error_shown:
+            return
+        if ok:
+            self._progress_bus.progress.emit(90, "Ładowanie interfejsu…")
+        else:
+            logger.warning("WebView loadFinished z błędem")
+
+    def _on_safety_net(self) -> None:
+        """12 s upłynęło bez ``notify_ui_ready`` — forsujemy fade-out żeby
+        user nie utknął na ekranie ładowania jeśli JS się wywalił."""
+        if self._ui_ready_handled or self._startup_error_shown:
+            return
+        logger.warning("Safety net: notify_ui_ready nie nadeszło w 12 s — forsuję fade-out")
+        self._on_ui_ready()

@@ -5,9 +5,6 @@ PyQt6
 PyQt6-WebEngine
 yt-dlp
 pydantic
-markdown
-fpdf2
-weasyprint
 pyinstaller
 streamlink
 openai-whisper

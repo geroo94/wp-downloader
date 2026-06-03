@@ -12,6 +12,8 @@ Użytkownik widzi normalny interfejs webowy ale bez paska adresu przeglądarki.
 """
 
 from __future__ import annotations
+import logging
+import subprocess
 import sys
 import os
 
@@ -20,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtWidgets import (
     QMainWindow,
+    QStackedLayout,
     QSystemTrayIcon,
     QMenu,
     QApplication,
@@ -29,43 +32,16 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtWebEngineWidgets import QWebEngineView # type: ignore
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage  # type: ignore
 from PyQt6.QtWebChannel import QWebChannel
-from PyQt6.QtCore import QUrl, Qt, QObject, pyqtSlot
-from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtCore import QUrl, Qt, QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QIcon, QAction, QKeySequence, QShortcut
 
+from loading_overlay import LoadingOverlay
 from server_thread import PORT
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from download_manager import DownloadManager
-
-# Shown immediately in QWebEngineView before the FastAPI server is ready.
-# Uses the real WP logo via a file:// baseUrl set in show_loading() so the
-# <img src="wp_logo.png"> reference resolves without embedding base64.
-_LOADING_HTML = """<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#FBFBFA;display:flex;align-items:center;justify-content:center;
-     height:100vh;font-family:system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-.w{display:flex;flex-direction:column;align-items:center;gap:10px}
-.logo{width:96px;height:auto;display:block}
-.nm{font-size:17px;font-weight:800;color:#111;letter-spacing:-0.04em;margin-top:4px}
-.sb{font-size:12px;color:#787774;font-weight:500;transition:opacity .2s;text-align:center;min-height:18px}
-.tr{width:160px;height:2px;background:#EAEAEA;border-radius:99px;overflow:hidden;margin-top:10px}
-.fl{height:100%;width:45%;background:#E3000F;border-radius:99px;
-    animation:s 1.1s cubic-bezier(.4,0,.2,1) infinite}
-@keyframes s{0%{transform:translateX(-200%)}100%{transform:translateX(320%)}}
-</style>
-<script>
-function updateStatus(msg){var el=document.getElementById('loading-status');if(el)el.textContent=msg;}
-</script>
-</head>
-<body><div class="w">
-<img src="wp_logo.png" class="logo" alt="WP">
-<div class="nm">WP Downloader</div>
-<div class="sb" id="loading-status">Uruchamianie…</div>
-<div class="tr"><div class="fl"></div></div>
-</div></body></html>"""
-
 
 def get_resource_path(relative_path: str) -> str:
     """Zwraca poprawną ścieżkę do zasobów, działającą także po spakowaniu do EXE."""
@@ -78,11 +54,25 @@ LOGO_PATH = get_resource_path(os.path.join("static", "wp_logo.png"))
 
 
 class WebBridge(QObject):
-    """Mostek QWebChannel: strona HTML wywołuje natywne okno wyboru folderu."""
+    """Mostek QWebChannel: strona HTML wywołuje natywne okno wyboru folderu.
+
+    Sygnał ``ui_ready`` jest emitowany gdy strona zaraportuje pełne
+    załadowanie interfejsu (przez wywołanie ``window.wpBridge.notify_ui_ready()``
+    z handlera wiadomości WebSocketowej ``{type:'init'}`` w index.html).
+    ``AppController`` łapie ten sygnał i wtedy odpala fade-out splasha
+    plus fade-in głównego okna.
+    """
+
+    ui_ready = pyqtSignal()
 
     def __init__(self, main_window: QWidget):
         super().__init__()
         self._main_window = main_window
+
+    @pyqtSlot()
+    def notify_ui_ready(self) -> None:
+        """JS → Qt: interfejs gotowy do pokazania (WebSocket init przyszedł)."""
+        self.ui_ready.emit()
 
     @pyqtSlot(str, str, result=str)
     def pick_save_file(self, suggested_name: str, file_filter: str) -> str:
@@ -92,6 +82,22 @@ class WebBridge(QObject):
             "Zapisz plik jako...",
             os.path.join(str(Path.home() / "Downloads"), suggested_name),
             file_filter
+        )
+        return path or ""
+
+    @pyqtSlot(str, str, result=str)
+    def pick_open_file(self, suggested_dir: str, file_filter: str) -> str:
+        """Otwiera natywne okno wyboru pliku i zwraca pełną ścieżkę.
+
+        Używane przez UI do wskazania pliku cookies.txt (Netscape format).
+        ``suggested_dir`` jest punktem startowym; jeżeli pusty, używamy
+        folderu Pobierania użytkownika."""
+        start = suggested_dir or str(Path.home() / "Downloads")
+        path, _ = QFileDialog.getOpenFileName(
+            self._main_window,
+            "Wybierz plik z ciasteczkami",
+            start,
+            file_filter or "Plik tekstowy (*.txt);;Wszystkie pliki (*)",
         )
         return path or ""
     
@@ -209,13 +215,24 @@ class MainWindow(QMainWindow):
         _page = QWebEnginePage(self._profile, self.web_view)
         self.web_view.setPage(_page)
 
-        self._web_bridge = WebBridge(self)
+        # Public alias `bridge` — AppController łapie się sygnału `ui_ready`.
+        self.bridge = WebBridge(self)
         self._web_channel = QWebChannel(self.web_view.page())
-        self._web_channel.registerObject("wpBridge", self._web_bridge)
+        self._web_channel.registerObject("wpBridge", self.bridge)
         self.web_view.page().setWebChannel(self._web_channel)
 
-        # Ustaw web_view jako centralny widget okna
-        self.setCentralWidget(self.web_view)
+        # Central widget: kontener trzymający WebView i LoadingOverlay w jednym
+        # stacku. StackingMode.StackAll utrzymuje oba dzieci widoczne i w tym
+        # samym rozmiarze automatycznie (Qt sam pilnuje resize). Overlay
+        # raisujemy na wierzch, żeby kryć WebView dopóki UI się nie załaduje.
+        central = QWidget(self)
+        stack = QStackedLayout(central)
+        stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        stack.addWidget(self.web_view)
+        self.loading_overlay = LoadingOverlay(LOGO_PATH, central)
+        stack.addWidget(self.loading_overlay)
+        self.loading_overlay.raise_()
+        self.setCentralWidget(central)
 
         # Tray/close behaviour (can be toggled from Settings tab)
         self.minimize_to_tray: bool = False
@@ -230,6 +247,18 @@ class MainWindow(QMainWindow):
         folder_action.triggered.connect(self._pick_download_folder)
         file_menu.addAction(folder_action)
 
+        # Skrót: Ctrl+D (Win/Linux) / Cmd+D (macOS) → otwiera domyślny folder
+        # pobierań w systemowym menedżerze plików. Qt sam tłumaczy `Ctrl` na
+        # native `Meta` (Cmd) na macOS przy QKeySequence("Ctrl+...").
+        open_dl_action = QAction("Otwórz folder pobierań", self)
+        open_dl_action.setShortcut(QKeySequence("Ctrl+D"))
+        open_dl_action.triggered.connect(self._open_default_download_folder)
+        file_menu.addAction(open_dl_action)
+        # Dodatkowy globalny QShortcut na wszelki wypadek (gdy menu jest
+        # ukryte / fokus nie należy do MainWindow).
+        self._dl_folder_shortcut = QShortcut(QKeySequence("Ctrl+D"), self)
+        self._dl_folder_shortcut.activated.connect(self._open_default_download_folder)
+
     def _pick_download_folder(self):
         path = QFileDialog.getExistingDirectory(
             self,
@@ -239,6 +268,24 @@ class MainWindow(QMainWindow):
         if path:
             self.download_manager.set_output_dir(path)
 
+    def _open_default_download_folder(self) -> None:
+        """Otwiera w systemowym menedżerze plików folder ustawiony w aplikacji
+        jako domyślny katalog pobierań. Jeśli nie ustawiono albo nie istnieje,
+        fallback do ``~/Downloads``."""
+        folder = (self.download_manager.output_dir or "").strip()
+        if not folder or not os.path.isdir(folder):
+            folder = str(Path.home() / "Downloads")
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            elif sys.platform == "win32":
+                os.startfile(folder)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", folder])
+            logger.info("Otwarto folder pobierań: %s", folder)
+        except Exception as exc:
+            logger.warning("Nie udało się otworzyć folderu pobierań %r: %s", folder, exc)
+
     def _center_on_screen(self):
         """Wyśrodkowuje okno na ekranie."""
         screen = self.app.primaryScreen().geometry()
@@ -246,16 +293,17 @@ class MainWindow(QMainWindow):
         y = (screen.height() - self.height()) // 2
         self.move(x, y)
 
-    def show_loading(self) -> None:
-        """Wyświetla natywny ekran ładowania zanim serwer będzie gotowy."""
-        static_dir = get_resource_path("static")
-        base_url = QUrl.fromLocalFile(static_dir + "/")
-        self.web_view.setHtml(_LOADING_HTML, base_url)
-
     def load_app(self) -> None:
         """Ładuje stronę aplikacji z lokalnego serwera."""
         url = QUrl(f"http://127.0.0.1:{PORT}")
         self.web_view.load(url)
+
+    def start_main_ui_fade_in(self) -> None:
+        """Daje JS sygnał do uruchomienia CSS transition `body.opacity 0→1`.
+        Wywoływane przez AppController po zakończeniu fade-out overlay'a."""
+        self.web_view.page().runJavaScript(
+            "document.body && document.body.classList.add('ready');"
+        )
 
     def closeEvent(self, event):
         if self.minimize_to_tray:
