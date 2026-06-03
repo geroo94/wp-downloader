@@ -35,8 +35,12 @@ jobs:
       - name: Install PyTorch (CPU-only, keeps CI fast)
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
+      # `pillow` dorzucony jawnie, bo PyInstaller BUNDLE potrzebuje go żeby
+      # przekonwertować `static/wp_logo.png` → tymczasowy `.icns` w trakcie
+      # budowania bundla. Bez niego krok "Build .app" wywala się w
+      # PyInstaller/building/icon.py: `ModuleNotFoundError: No module named 'PIL'`.
       - name: Install dependencies
-        run: pip install --prefer-binary -r requirements.txt pyinstaller
+        run: pip install --prefer-binary -r requirements.txt pyinstaller pillow
 
       # Używamy .spec zamiast build_app.py, żeby info_plist (CFBundleName,
       # CFBundleShortVersionString, LSMinimumSystemVersion, NSCamera/Microphone
