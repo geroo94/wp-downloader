@@ -38,8 +38,41 @@ jobs:
       - name: Install dependencies
         run: pip install --prefer-binary -r requirements.txt pyinstaller
 
+      # Używamy .spec zamiast build_app.py, żeby info_plist (CFBundleName,
+      # CFBundleShortVersionString, LSMinimumSystemVersion, NSCamera/Microphone
+      # usage description) wszedł do docelowego .app. Bez tych kluczy bundle
+      # crashuje na macOS 26+ w __CFCheckCFInfoPACSignature → CFBundleCopyBundleURL
+      # podczas dlopen QtCore.abi3.so (sprawdzone realnym crash logiem z M5/macOS26).
       - name: Build .app
-        run: python build_app.py
+        run: pyinstaller wp_downloader.spec --noconfirm
+
+      # QtWebEngine ładuje V8 z runtime JIT. Bez ad-hoc codesignu z
+      # entitlements (allow-jit + allow-unsigned-executable-memory +
+      # disable-library-validation) Hardened Runtime na macOS 14/15/26
+      # killuje proces helper natychmiast po starcie.
+      - name: Ad-hoc codesign with entitlements
+        run: |
+          codesign --force --deep --sign - \
+            --entitlements build/entitlements.plist \
+            --options runtime \
+            dist/WP_Downloader.app
+          codesign --verify --verbose dist/WP_Downloader.app
+
+      # Sanity check — gdyby `collect-all=PyQt6` przegapił helpera,
+      # app nie ma jak wystartować WebView. Lepiej zakończyć budowę
+      # tutaj niż wysyłać uszkodzony bundle na release.
+      - name: Verify QtWebEngineProcess.app present
+        run: |
+          if [ -z "$(find dist/WP_Downloader.app -name 'QtWebEngineProcess.app' -print -quit)" ]; then
+            echo "::error::QtWebEngineProcess.app missing from bundle"
+            exit 1
+          fi
+          find dist/WP_Downloader.app -name 'QtWebEngineProcess.app' -print
+
+      # Zdejmij quarantine, żeby user po `open dist/WP_Downloader.app`
+      # nie musiał klikać przez Gatekeeper'a / "uszkodzony plik".
+      - name: Strip quarantine xattr from .app
+        run: xattr -dr com.apple.quarantine dist/WP_Downloader.app || true
 
       - name: Package DMG
         run: |
@@ -50,6 +83,9 @@ jobs:
             -srcfolder "dist/dmg" \
             -ov -format UDZO \
             "dist/WP_Downloader_macOS.dmg"
+
+      - name: Strip quarantine xattr from DMG
+        run: xattr -dr com.apple.quarantine dist/WP_Downloader_macOS.dmg || true
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2

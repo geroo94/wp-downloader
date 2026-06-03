@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- QtWebEngine używa V8 z runtime JIT; bez allow-jit Hardened Runtime
+         killuje proces helper Chromium natychmiast po starcie. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- QtWebEngine mapuje pamięć wykonywalną dla JIT-owanego kodu V8. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- PyInstaller propaguje DYLD_LIBRARY_PATH do procesów potomnych
+         (helper Chromium musi je dziedziczyć żeby znaleźć biblioteki). -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <!-- Bundle zawiera moduły dynamicznie ładowane bez podpisu dewelopera
+         (sciągnięte yt-dlp / streamlink, ad-hoc codesign). -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- HTTP(S) do YouTube / Instagram / Facebook + websocket do siebie. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- FastAPI nasłuchuje na 127.0.0.1:8765 (lokalny serwer aplikacji). -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <!-- QFileDialog: użytkownik wybiera folder pobierań, cookies.txt itp. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>

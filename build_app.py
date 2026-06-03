@@ -35,6 +35,7 @@ def run_build():
         '--collect-all=weasyprint',
         '--collect-all=streamlink', # Pobieranie live streamów (Facebook)
         '--collect-all=whisper',    # Transkrypcja audio (Whisper)
+        '--osx-bundle-identifier=com.geroo94.wpdownloader',
         '--clean',
         '--noconfirm',  # nadpisuje istniejący dist/ bez pytania
     ]
