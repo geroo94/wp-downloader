@@ -55,7 +55,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['/Users/lgerke/Desktop/wp_downloader/static/wp_logo.png'],
+    icon=['static/wp_logo.png'],
 )
 coll = COLLECT(
     exe,
@@ -69,7 +69,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='WP_Downloader.app',
-    icon='/Users/lgerke/Desktop/wp_downloader/static/wp_logo.png',
+    icon='static/wp_logo.png',
     bundle_identifier='com.geroo94.wpdownloader',
     # macOS 26+ na Apple Silicon waliduje PAC sygnatury metadanych bundla;
     # bundle bez tych kluczy crashuje w __CFCheckCFInfoPACSignature na
