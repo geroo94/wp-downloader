@@ -99,11 +99,7 @@ class AppController:
         self.server_thread = ServerThread(self.download_manager)
         self.main_window = MainWindow(self.qt_app, self.download_manager)
 
-        # Loading overlay siedzi w stacku central widgetu main_window i kryje
-        # WebView dopóki UI się nie załaduje. Alias dla czytelności.
-        self.overlay = self.main_window.loading_overlay
-
-        # Progres workerów → overlay
+        # Progres workerów → log (overlay już nie istnieje — splash jest po stronie HTML).
         self._progress_bus = LoadingProgress()
         self._progress_bus.progress.connect(
             self._on_progress, type=Qt.ConnectionType.QueuedConnection
@@ -112,7 +108,7 @@ class AppController:
         # Bridge JS → Qt: WS init oznacza „interfejs gotowy"
         self.main_window.bridge.ui_ready.connect(self._on_ui_ready)
 
-        # Atrybuty trzymane żeby Qt nie zebrał animacji i timerów przez GC.
+        # Atrybuty trzymane żeby Qt nie zebrał timerów przez GC.
         self._poll_attempts = 0
         self._poll_timer: QTimer | None = None
         self._safety_net_timer: QTimer | None = None
@@ -122,43 +118,21 @@ class AppController:
     # ── slots ────────────────────────────────────────────────────────────
 
     def _on_progress(self, percent: int, text: str) -> None:
-        """Slot: aktualizuje overlay. Działa na głównym wątku (QueuedConnection)."""
-        if self.overlay is None:
-            return
-        self.overlay.set_progress(percent)
+        """Slot: loguje stage. Działa na głównym wątku (QueuedConnection)."""
         if text:
-            self.overlay.set_status(text)
             logger.info("loading %d%%: %s", percent, text)
 
     def _on_ui_ready(self) -> None:
         """JS poinformował że interfejs się załadował (WS init przyszedł).
-        Skacze do 100 %, czeka 300 ms żeby user zobaczył zielony pasek,
-        potem fade-out overlay'a."""
+        Triggerujemy body.ready → MutationObserver w index.html odpala
+        timeline reveal (splash fade-out + header/nav/cards drop-in)."""
         if self._ui_ready_handled or self._startup_error_shown:
             return
         self._ui_ready_handled = True
         if self._safety_net_timer is not None:
             self._safety_net_timer.stop()
         self._progress_bus.progress.emit(100, "Gotowe")
-        QTimer.singleShot(300, self._start_overlay_fade_out)
-
-    def _start_overlay_fade_out(self) -> None:
-        if self.overlay is None or self._startup_error_shown:
-            return
-        self.overlay.finished.connect(self._after_overlay_fade_out)
-        self.overlay.start_fade_out(350)
-
-    def _after_overlay_fade_out(self) -> None:
-        """Overlay zakończył fade-out (jest już ukryty). Każ JS dorzucić klasę
-        `ready` do <body> — odpala się CSS transition opacity 0→1 i docelowy
-        interfejs wyłania się w tym samym miejscu. Po ~600 ms zwalniamy overlay."""
         self.main_window.start_main_ui_fade_in()
-        # Zwolnij overlay z pamięci dopiero gdy CSS transition się skończy,
-        # żeby Qt nie zaczął niczego repaintować w trakcie animacji JS.
-        overlay = self.overlay
-        if overlay is not None:
-            self.overlay = None
-            QTimer.singleShot(600, overlay.deleteLater)
 
     # ── error path ───────────────────────────────────────────────────────
 
@@ -197,13 +171,6 @@ class AppController:
     <li>Jeśli to powtarzający się błąd — wyślij plik logu (ścieżka wyżej).</li>
   </ul>
 </body></html>"""
-        # Awaryjnie ukryj overlay żeby WebView spod niego stał się widoczny.
-        if self.overlay is not None:
-            try:
-                self.overlay.force_hide()
-            except Exception:
-                pass
-            self.overlay = None
         self.main_window.raise_()
         self.main_window.activateWindow()
         try:
@@ -216,8 +183,8 @@ class AppController:
     def run(self):
         logger.info("Inicjalizacja komponentów aplikacji...")
 
-        # 1. Pokaż główne okno od razu (100 % opacity). Overlay jest częścią
-        #    central widgetu i kryje WebView — user widzi widok ładowania.
+        # 1. Pokaż główne okno od razu — WebView jest puste, ale za chwilę
+        #    załaduje index.html z własnym HTML-side splashem.
         self.main_window.show()
         self.main_window.raise_()
         self.main_window.activateWindow()
