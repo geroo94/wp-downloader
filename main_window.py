@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtWidgets import (
     QMainWindow,
-    QStackedLayout,
     QSystemTrayIcon,
     QMenu,
     QApplication,
@@ -35,7 +34,6 @@ from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtCore import QUrl, Qt, QObject, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QIcon, QAction, QKeySequence, QShortcut
 
-from loading_overlay import LoadingOverlay
 from server_thread import PORT
 
 logger = logging.getLogger(__name__)
@@ -110,8 +108,8 @@ class WebBridge(QObject):
     @pyqtSlot(str)
     def resize_window_preset(self, preset: str) -> None:
         """Zmienia rozmiar okna według presetu: compact / normal / large."""
-        sizes = {"compact": (900, 640), "normal": (1080, 780), "large": (1380, 900)}
-        w, h = sizes.get(preset, (1080, 780))
+        sizes = {"compact": (900, 640), "normal": (1200, 800), "large": (1380, 900)}
+        w, h = sizes.get(preset, (1200, 800))
         self._main_window.resize(w, h)
         self._main_window._center_on_screen()
 
@@ -187,7 +185,7 @@ class MainWindow(QMainWindow):
 
         # Tytuł okna i rozmiar
         self.setWindowTitle("WP Downloader v1.0")
-        self.resize(1080, 780)
+        self.resize(1200, 800)
         self.setMinimumSize(820, 580)
 
         # Wyśrodkuj okno na ekranie
@@ -221,18 +219,10 @@ class MainWindow(QMainWindow):
         self._web_channel.registerObject("wpBridge", self.bridge)
         self.web_view.page().setWebChannel(self._web_channel)
 
-        # Central widget: kontener trzymający WebView i LoadingOverlay w jednym
-        # stacku. StackingMode.StackAll utrzymuje oba dzieci widoczne i w tym
-        # samym rozmiarze automatycznie (Qt sam pilnuje resize). Overlay
-        # raisujemy na wierzch, żeby kryć WebView dopóki UI się nie załaduje.
-        central = QWidget(self)
-        stack = QStackedLayout(central)
-        stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
-        stack.addWidget(self.web_view)
-        self.loading_overlay = LoadingOverlay(LOGO_PATH, central)
-        stack.addWidget(self.loading_overlay)
-        self.loading_overlay.raise_()
-        self.setCentralWidget(central)
+        # Central widget = WebView. Splash + reveal pochodzą z HTML-side
+        # (#splash + initSplashReveal w index.html), Qt nie kryje już
+        # WebView własnym overlay'em.
+        self.setCentralWidget(self.web_view)
 
         # Tray/close behaviour (can be toggled from Settings tab)
         self.minimize_to_tray: bool = False
