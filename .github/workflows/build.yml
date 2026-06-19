@@ -5,7 +5,8 @@ on:
     types: [published]
   push:
     tags:
-      - 'v*'
+      - 'v*'         # SemVer z prefiksem: v1.0, v1.0.1
+      - '[0-9]*'     # PEP-440 bez prefiksu: 1.0, 1.0.1, 2.0
   workflow_dispatch:
 
 permissions:
@@ -95,6 +96,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/WP_Downloader_macOS.dmg
+          generate_release_notes: true
+          name: WP Downloader ${{ github.ref_name }}
+          fail_on_unmatched_files: true
 
   # ── Windows ────────────────────────────────────────────────────────────────
   build-windows:
@@ -144,3 +148,6 @@ jobs:
           files: |
             dist/WP_Downloader_Windows.zip
             Output/WP_Downloader_Setup.exe
+          generate_release_notes: true
+          name: WP Downloader ${{ github.ref_name }}
+          fail_on_unmatched_files: true
