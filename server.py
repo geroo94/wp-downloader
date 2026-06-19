@@ -172,10 +172,32 @@ def _fmt_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+_WHISPER_MODEL_SIZES = ("tiny", "base", "small", "medium", "large", "large-v2", "large-v3")
+
+# Per-rozmiar initial_prompt mocno biases Whisper na kierunek "to jest polski język"
+# — redukuje halucynacje gdy nagranie zaczyna się od muzyki/szumu/ciszy.
+_INITIAL_PROMPTS = {
+    "pl": "Poniżej znajduje się dokładna transkrypcja nagrania w języku polskim. Zachowaj polskie znaki diakrytyczne (ą, ć, ę, ł, ń, ó, ś, ź, ż).",
+}
+
+
 async def _run_transcription(manager: DownloadManager, task_id: str, video_path: str,
-                              language: str = "") -> None:
+                              language: str = "pl", model_size: str = "small") -> None:
     """Background task: transcribe a video file with Whisper and save as .txt with timecodes.
-       language: ISO 639-1 code ("pl", "en", "uk", ...) or "" for auto-detect."""
+
+       Args:
+           language: ISO 639-1 code ("pl", "en", "uk", ...) or "" for auto-detect.
+                     Default "pl" — większość naszych pobierań to materiały po polsku
+                     (WP/TVP/Polsat itd.), auto-detect na początku często myli się z
+                     angielskim gdy nagranie zaczyna się od muzyki/jingli.
+           model_size: jeden z `_WHISPER_MODEL_SIZES`. Default "small" — minimum
+                     dla sensownego polskiego. "tiny"/"base" mają tragiczną jakość
+                     dla pl (ucinanie wyrazów, błędne znaki). Większe modele = lepsza
+                     jakość ale wolniejsze i więcej RAM.
+    """
+    # Walidacja rozmiaru modelu (whitelist — żeby ktoś nie wrzucił pathów na dysk)
+    model_size = model_size if model_size in _WHISPER_MODEL_SIZES else "small"
+
     await manager.update_task(task_id, transcription="in_progress")
     txt_path = os.path.splitext(video_path)[0] + ".txt"
     loop = asyncio.get_event_loop()
@@ -183,10 +205,35 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
         import whisper
 
         def _transcribe() -> str:
-            model = whisper.load_model("base")
-            kwargs = {"task": "transcribe"}
+            model = whisper.load_model(model_size)
+            # Parametry zoptymalizowane pod jakość transkrypcji polskiej:
+            # - task="transcribe" (nie "translate" które zamienia na angielski)
+            # - language="pl" (lub user-selected) — explicit, bez auto-detect halucynacji
+            # - fp16=False — wymusza float32 (CPU friendly; fp16 na CPU bywa unstable)
+            # - condition_on_previous_text=False — KLUCZOWE: domyślnie Whisper
+            #   "pamięta" poprzedni segment do kondycjonowania kolejnego, co bardzo
+            #   często wpada w pętlę halucynacji ("powtarza dziwne frazy"). Wyłączone
+            #   znacząco poprawia stabilność dla długich nagrań.
+            # - temperature: 0.0 jako pierwszy próg, potem fallback do wyższych
+            #   gdy compression_ratio przekroczy próg (default whisper behaviour).
+            # - beam_size=5 — beam search zamiast greedy decode; lepsza jakość
+            #   kosztem ~3x wolniejszego decode (warto dla pl).
+            # - initial_prompt — sterowanie modelem na polskie diakrytyki.
+            kwargs = {
+                "task": "transcribe",
+                "fp16": False,
+                "condition_on_previous_text": False,
+                "beam_size": 5,
+                "temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+                "compression_ratio_threshold": 2.4,
+                "no_speech_threshold": 0.6,
+                "verbose": False,
+            }
             if language:
                 kwargs["language"] = language
+                if language in _INITIAL_PROMPTS:
+                    kwargs["initial_prompt"] = _INITIAL_PROMPTS[language]
+
             result = model.transcribe(video_path, **kwargs)
             lines = []
             for seg in result.get("segments", []):
@@ -196,16 +243,20 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
             return "\n".join(lines) if lines else result.get("text", "").strip()
 
         text = await asyncio.wait_for(loop.run_in_executor(None, _transcribe), timeout=3600)
-        with open(txt_path, "w", encoding="utf-8") as f:
+        # encoding="utf-8" wymusza poprawny zapis polskich diakrytyków na Windowsie
+        # (gdzie default to cp1250); dodajemy newline na końcu pliku (POSIX).
+        with open(txt_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
+            if text and not text.endswith("\n"):
+                f.write("\n")
         await manager.update_task(task_id, transcription=txt_path)
-        logger.info(f"Transkrypcja gotowa: {txt_path}")
+        logger.info("Transkrypcja gotowa (%s/%s): %s", model_size, language or "auto", txt_path)
     except ImportError:
         await manager.update_task(task_id, transcription="error")
         logger.error("openai-whisper nie jest zainstalowany")
     except Exception as e:
         await manager.update_task(task_id, transcription="error")
-        logger.error(f"Błąd transkrypcji: {e}")
+        logger.exception("Błąd transkrypcji (%s/%s): %s", model_size, language or "auto", e)
 
 
 def _fetch_m3u8_from_page(url: str) -> list[dict]:
@@ -489,7 +540,8 @@ def create_app(manager: DownloadManager) -> FastAPI:
     @app.post("/api/tasks/{task_id}/transcribe")
     async def transcribe_task(task_id: str, payload: dict | None = None):
         """Creates a .txt transcription of the downloaded file using Whisper.
-           Optional body: {"language": "pl"} — pass empty / omit for auto-detect."""
+           Body: {"language": "pl", "model_size": "small"}
+                 language="" → auto-detect; model_size whitelist w _WHISPER_MODEL_SIZES."""
         task = manager.tasks.get(task_id)
         if not task:
             return JSONResponse({"error": "Zadanie nie istnieje"}, status_code=404)
@@ -497,14 +549,19 @@ def create_app(manager: DownloadManager) -> FastAPI:
             return JSONResponse({"error": "Tylko zakończone zadania można transkrybować"}, status_code=400)
         if task.transcription == "in_progress":
             return JSONResponse({"error": "Transkrypcja już w toku"}, status_code=400)
-        language = ""
+        language = "pl"  # default — większość naszych pobierań to polski
+        model_size = "small"  # default — minimum dla sensownego polskiego
         if payload and isinstance(payload, dict):
-            raw = (payload.get("language") or "").strip().lower()
-            # only accept short ISO codes; anything else → auto-detect
-            if re.fullmatch(r"[a-z]{2,3}", raw):
-                language = raw
-        asyncio.create_task(_run_transcription(manager, task_id, task.output_path, language))
-        return JSONResponse({"ok": True, "language": language or "auto"})
+            raw_lang = (payload.get("language") or "").strip().lower()
+            if raw_lang == "auto":
+                language = ""  # explicit auto-detect
+            elif re.fullmatch(r"[a-z]{2,3}", raw_lang):
+                language = raw_lang
+            raw_size = (payload.get("model_size") or "").strip().lower()
+            if raw_size in _WHISPER_MODEL_SIZES:
+                model_size = raw_size
+        asyncio.create_task(_run_transcription(manager, task_id, task.output_path, language, model_size))
+        return JSONResponse({"ok": True, "language": language or "auto", "model_size": model_size})
 
     @app.post("/api/tasks/{task_id}/reveal")
     async def reveal_task_file(task_id: str):

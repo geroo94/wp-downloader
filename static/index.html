@@ -1130,16 +1130,18 @@
   </div>
 </div>
 
-<!-- Transcription language modal -->
+<!-- Transcription language + model modal -->
 <div id="lang-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;width:min(420px,92vw);padding:22px;box-shadow:0 24px 80px rgba(0,0,0,0.3)">
-    <div style="font-size:14px;font-weight:700;color:var(--text-1);margin-bottom:6px;letter-spacing:-0.01em">Wybierz język transkrypcji</div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;width:min(460px,92vw);padding:22px;box-shadow:0 24px 80px rgba(0,0,0,0.3)">
+    <div style="font-size:14px;font-weight:700;color:var(--text-1);margin-bottom:6px;letter-spacing:-0.01em">Parametry transkrypcji</div>
     <div style="font-size:12px;color:var(--text-2);margin-bottom:14px;line-height:1.5">
-      Wybór konkretnego języka znacznie poprawia jakość transkrypcji. Dla nagrań po polsku wybierz <strong>Polski</strong>.
+      Wybór konkretnego języka znacznie poprawia jakość transkrypcji. Dla nagrań po polsku wybierz <strong>Polski</strong> oraz model <strong>Small</strong> lub większy.
     </div>
+
+    <div style="font-size:11px;font-weight:600;color:var(--text-2);letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px">Język</div>
     <select id="lang-select" style="height:38px;width:100%;border:1px solid var(--border);border-radius:8px;padding:0 10px;font-size:13px;font-family:inherit;background:var(--surf-subtle);color:var(--text-1);margin-bottom:14px;cursor:pointer">
       <option value="pl" selected>Polski</option>
-      <option value="">Wykryj automatycznie</option>
+      <option value="auto">Wykryj automatycznie</option>
       <option value="en">Angielski</option>
       <option value="uk">Ukraiński</option>
       <option value="de">Niemiecki</option>
@@ -1158,6 +1160,19 @@
       <option value="ko">Koreański</option>
       <option value="ar">Arabski</option>
     </select>
+
+    <div style="font-size:11px;font-weight:600;color:var(--text-2);letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px">Model Whisper (jakość vs. szybkość)</div>
+    <select id="model-select" style="height:38px;width:100%;border:1px solid var(--border);border-radius:8px;padding:0 10px;font-size:13px;font-family:inherit;background:var(--surf-subtle);color:var(--text-1);margin-bottom:6px;cursor:pointer">
+      <option value="tiny">Tiny — najszybszy, słaba jakość (39M)</option>
+      <option value="base">Base — szybki, słaba jakość po polsku (74M)</option>
+      <option value="small" selected>Small — minimum dla polskiego (244M)</option>
+      <option value="medium">Medium — bardzo dobra jakość (769M, ~5 GB RAM)</option>
+      <option value="large-v3">Large v3 — najlepsza jakość, najwolniejszy (1550M, ~10 GB RAM)</option>
+    </select>
+    <div id="model-warning" style="font-size:11px;color:#B45309;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:7px 10px;margin-bottom:14px;display:none">
+      ⚠ Modele <strong>tiny</strong> i <strong>base</strong> dla języka polskiego dają fatalne wyniki (ucinanie wyrazów, błędne znaki). Wybierz minimum <strong>Small</strong>.
+    </div>
+
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn-about-link" onclick="document.getElementById('lang-modal').style.display='none'; window._langModalResolve && window._langModalResolve(null)">Anuluj</button>
       <button class="btn-about-link" style="background:var(--red);color:#fff;border-color:var(--red)" onclick="_langModalConfirm()">Rozpocznij</button>
@@ -1798,15 +1813,17 @@
             showToast('Zatrzymuję nagrywanie i zapisuję plik…');
           }
         } else if (act === 'transcribe') {
-          const lang = await pickTranscriptionLanguage();
-          if (lang === null) return; // user cancelled
+          const opts = await pickTranscriptionLanguage();
+          if (opts === null) return; // user cancelled
+          const { language, model_size } = opts;
           const r = await fetch('/api/tasks/' + encodeURIComponent(id) + '/transcribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ language: lang })
+            body: JSON.stringify({ language, model_size })
           });
           if (r.ok) {
-            showToast('Transkrypcja rozpoczęta (' + (lang || 'auto') + ') — może potrwać kilka minut…');
+            const langLabel  = language === 'auto' || !language ? 'auto' : language;
+            showToast('Transkrypcja rozpoczęta (' + langLabel + ' · ' + model_size + ') — może potrwać kilka minut…');
           } else {
             const e = await r.json().catch(() => ({}));
             showToast(e.error || 'Nie można uruchomić transkrypcji', true);
@@ -1915,26 +1932,45 @@
       .replace(/"/g, '&quot;');
   }
 
-  // Opens the transcription language modal and resolves with an ISO code
-  // (e.g. "pl", "en", "" for auto-detect), or null if the user cancelled.
+  // Opens the transcription modal and resolves with { language, model_size },
+  // or null if the user cancelled. Language "auto" (lub puste) → auto-detect po
+  // stronie backendu. Model size jest persisted w localStorage osobno od języka.
   function pickTranscriptionLanguage() {
     return new Promise(resolve => {
-      const modal = document.getElementById('lang-modal');
-      const sel = document.getElementById('lang-select');
-      const saved = localStorage.getItem('wp-transcribe-lang');
-      if (saved !== null && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+      const modal     = document.getElementById('lang-modal');
+      const langSel   = document.getElementById('lang-select');
+      const modelSel  = document.getElementById('model-select');
+      const warning   = document.getElementById('model-warning');
+
+      const savedLang  = localStorage.getItem('wp-transcribe-lang');
+      const savedModel = localStorage.getItem('wp-transcribe-model');
+      if (savedLang  !== null && [...langSel.options ].some(o => o.value === savedLang )) langSel.value  = savedLang;
+      if (savedModel !== null && [...modelSel.options].some(o => o.value === savedModel)) modelSel.value = savedModel;
+
+      // Pokaż warning gdy pl + (tiny|base) — jakość będzie tragiczna.
+      function refreshWarning() {
+        const isPolish = langSel.value === 'pl';
+        const isWeak   = modelSel.value === 'tiny' || modelSel.value === 'base';
+        warning.style.display = (isPolish && isWeak) ? 'block' : 'none';
+      }
+      langSel.onchange = refreshWarning;
+      modelSel.onchange = refreshWarning;
+      refreshWarning();
+
       window._langModalResolve = (val) => {
         window._langModalResolve = null;
         modal.style.display = 'none';
         resolve(val);
       };
       window._langModalConfirm = () => {
-        const v = sel.value;
-        localStorage.setItem('wp-transcribe-lang', v);
-        window._langModalResolve(v);
+        const language   = langSel.value;
+        const model_size = modelSel.value;
+        localStorage.setItem('wp-transcribe-lang',  language);
+        localStorage.setItem('wp-transcribe-model', model_size);
+        window._langModalResolve({ language, model_size });
       };
       modal.style.display = 'flex';
-      setTimeout(() => sel.focus(), 0);
+      setTimeout(() => langSel.focus(), 0);
     });
   }
 
