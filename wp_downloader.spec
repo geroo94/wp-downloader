@@ -1,7 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os as _os
 from PyInstaller.utils.hooks import collect_all
 
 datas = [('static', 'static')]
+# Deno binary (bin/deno[.exe]) jest pobierany przez workflow / lokalny build skrypt
+# i pakowany jako data. Na .app (mac) trafia do Contents/Resources/bin/,
+# na onedir (Win) do bin/ obok exe. yt_dlp_worker._detect_js_runtime() szuka
+# go w tych lokalizacjach zanim sięgnie po PATH — eliminuje YouTube HTTP 403
+# na czystych Windowsach bez deno w systemie.
+_bin_dir = _os.path.join(_os.path.dirname(SPEC), "bin")
+if _os.path.isdir(_bin_dir):
+    datas += [(_bin_dir, "bin")]
 binaries = []
 hiddenimports = ['uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.asyncio', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on', 'PyQt6.QtWebEngineCore']
 tmp_ret = collect_all('fastapi')

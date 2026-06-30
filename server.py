@@ -587,7 +587,13 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 if sys.platform == "darwin":
                     cmd = ["open", "-R", path]
                 elif sys.platform == "win32":
-                    cmd = ["explorer", "/select,", path]
+                    # explorer.exe wymaga `/select,PATH` jako JEDEN argument
+                    # (bez spacji między przecinkiem a ścieżką) + ścieżki z
+                    # backslashami. PyInstaller/yt-dlp trzymają forward slashes
+                    # w outtmpl, więc bez normpath() explorer odmawia (otwiera
+                    # tylko folder bez selekcji albo nic).
+                    win_path = os.path.normpath(path)
+                    cmd = ["explorer", f"/select,{win_path}"]
                 else:
                     cmd = ["xdg-open", parent or path]
             else:
@@ -601,7 +607,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 if sys.platform == "darwin":
                     cmd = ["open", target_dir]
                 elif sys.platform == "win32":
-                    cmd = ["explorer", target_dir]
+                    cmd = ["explorer", os.path.normpath(target_dir)]
                 else:
                     cmd = ["xdg-open", target_dir]
             subprocess.Popen(cmd)

@@ -43,6 +43,19 @@ jobs:
       - name: Install dependencies
         run: pip install --prefer-binary -r requirements.txt pyinstaller pillow
 
+      # Deno binary — yt-dlp 2026+ wymaga JS runtime do YouTube nsig challenge.
+      # Bez deno w bundlu user dostaje HTTP 403 na czystym macOS bez `brew install deno`.
+      # .spec pakuje katalog `bin/` jako data → trafia do .app/Contents/Resources/bin/.
+      - name: Download deno binary (macOS arm64)
+        run: |
+          mkdir -p bin
+          DENO_VERSION="2.7.12"
+          curl -L -o /tmp/deno.zip "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-aarch64-apple-darwin.zip"
+          unzip -o /tmp/deno.zip -d bin/
+          chmod +x bin/deno
+          rm /tmp/deno.zip
+          bin/deno --version
+
       # Używamy .spec zamiast build_app.py, żeby info_plist (CFBundleName,
       # CFBundleShortVersionString, LSMinimumSystemVersion, NSCamera/Microphone
       # usage description) wszedł do docelowego .app. Bez tych kluczy bundle
@@ -79,14 +92,30 @@ jobs:
       - name: Strip quarantine xattr from .app
         run: xattr -dr com.apple.quarantine dist/WP_Downloader.app || true
 
-      - name: Package DMG
+      # DMG drag&drop pattern — klasyczny wzorzec instalacji macOS:
+      # użytkownik widzi w DMG ikonę .app obok ikony /Applications,
+      # przeciąga z lewa na prawo. Pliki "wystawione" w DMG (nie sam .app
+      # rozpakowany) eliminuje problem "uszkodzony plik" gdy user uruchamia
+      # bezpośrednio z DMG (Gatekeeper blokuje read-only volume executables).
+      # Bez Apple Developer ID Gatekeeper nadal pokaże ostrzeżenie przy
+      # pierwszym uruchomieniu — user musi prawym→Otwórz raz.
+      - name: Package DMG (drag&drop pattern)
         run: |
-          mkdir -p dist/dmg
-          cp -r "dist/WP_Downloader.app" "dist/dmg/"
+          DMG_STAGING="dist/dmg-staging"
+          mkdir -p "$DMG_STAGING"
+          cp -R "dist/WP_Downloader.app" "$DMG_STAGING/"
+          # Symlink do /Applications obok .app — klasyczny drag&drop layout
+          ln -s /Applications "$DMG_STAGING/Applications"
+          # Re-chmod executable (cp -R potrafi gubić +x na niektórych wolumenach)
+          chmod +x "$DMG_STAGING/WP_Downloader.app/Contents/MacOS/WP_Downloader"
+          # Strip quarantine po cp -R (może propagować z source)
+          xattr -dr com.apple.quarantine "$DMG_STAGING/WP_Downloader.app" || true
+          # UDZO = compressed read-only, fs HFS+ dla max kompatybilności
           hdiutil create \
             -volname "WP Downloader" \
-            -srcfolder "dist/dmg" \
+            -srcfolder "$DMG_STAGING" \
             -ov -format UDZO \
+            -fs HFS+ \
             "dist/WP_Downloader_macOS.dmg"
 
       - name: Strip quarantine xattr from DMG
@@ -118,14 +147,30 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller pillow
 
+      # Deno binary (Win x64) — yt-dlp 2026+ wymaga JS runtime do YouTube nsig.
+      # Bez tego user na czystym Windowsie dostaje HTTP 403 ("JS runtimes: none"
+      # w logu). .spec pakuje katalog `bin/` jako data → trafia obok exe.
+      - name: Download deno binary (Windows x64)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          $DENO_VERSION = "2.7.12"
+          Invoke-WebRequest -Uri "https://github.com/denoland/deno/releases/download/v$DENO_VERSION/deno-x86_64-pc-windows-msvc.zip" -OutFile deno.zip
+          Expand-Archive -Path deno.zip -DestinationPath bin -Force
+          Remove-Item deno.zip
+          .\bin\deno.exe --version
+
       # Multi-res ICO (16/32/48/64/128/256) — Inno Setup używa najmniejszej
       # wersji do icon overlay w menu Start, większych do "Add/Remove Programs".
       - name: Build multi-res ICO
         run: |
           python -c "from PIL import Image; img = Image.open('static/wp_logo.png').convert('RGBA'); img.save('static/wp_logo.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
 
+      # WAŻNE: zamiast python build_app.py używamy .spec — `build_app.py` ignoruje
+      # nasz `wp_downloader.spec` (który pakuje bin/deno.exe + info_plist na mac).
+      # Build z .spec konsystentnie pakuje deno do dist\WP_Downloader\bin\deno.exe.
       - name: Build EXE folder
-        run: python build_app.py
+        run: pyinstaller wp_downloader.spec --noconfirm
 
       - name: Package ZIP
         run: Compress-Archive -Path dist\WP_Downloader -DestinationPath dist\WP_Downloader_Windows.zip

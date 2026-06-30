@@ -7,6 +7,7 @@ Graceful stop triggers FFmpeg merge of partial intermediate files.
 import asyncio
 import glob
 import shutil
+import sys
 import threading
 import os
 import re
@@ -23,18 +24,58 @@ logger = logging.getLogger(__name__)
 
 DOWNLOAD_DIR = str(Path.home() / "Downloads" / "WP Downloader")
 
-def _detect_js_runtime() -> dict:
-    """Return yt-dlp opts enabling a JS runtime for YouTube n-challenge solving.
+def _bundled_runtime_dir() -> list[str]:
+    """Kandydujące lokalizacje `bin/` z dołączonym deno binary.
 
-    yt-dlp 2026+ requires deno/node/bun/qjs to bypass YouTube's nsig throttle.
-    remote_components='ejs:github' downloads and caches the solver script on first use.
+    Frozen .app / .exe spakowany PyInstallerem bierze deno z `_MEIPASS/bin/`
+    (--onedir: rozpakowywany obok exe) lub z `bin/` w katalogu z exe (macOS
+    .app Resources/bin po `--add-data=bin:bin`).
+    Dev mode: project_root/bin/.
     """
-    for rt, binary in [("deno", "deno"), ("node", "node"), ("bun", "bun"), ("quickjs", "qjs")]:
-        path = shutil.which(binary)
+    cands: list[str] = []
+    if hasattr(sys, "_MEIPASS"):
+        cands.append(os.path.join(sys._MEIPASS, "bin"))
+        cands.append(os.path.join(os.path.dirname(sys.executable), "bin"))
+        # macOS .app: exe siedzi w Contents/MacOS/, deno w Contents/Resources/bin/
+        cands.append(os.path.join(os.path.dirname(sys.executable), "..", "Resources", "bin"))
+    # Dev mode (repo root)
+    cands.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin"))
+    return [os.path.normpath(c) for c in cands]
+
+
+def _detect_js_runtime() -> dict:
+    """yt-dlp opts dla YouTube nsig challenge.
+
+    yt-dlp 2026+ wymaga deno (lub node/bun/qjs) — bez tego YouTube zwraca 403
+    Forbidden na czystych Windowsach (brak runtime w PATH). Szukamy w kolejności:
+
+    1. **bundled** — bin/deno[.exe] dołączone do paczki przez .spec datas.
+       Najważniejsze: niezależne od stanu PATH na maszynie usera.
+    2. **PATH** — fallback gdy dev/power-user ma zainstalowane.
+    3. Brak — log warning, YouTube będzie zwracać 403.
+
+    remote_components="ejs:github" mówi yt-dlp żeby pobrał+cache'ował EJS
+    (Embedded JavaScript) solver przy pierwszym użyciu.
+    """
+    binary = "deno.exe" if sys.platform == "win32" else "deno"
+
+    # 1) bundled — najwyższy priorytet
+    for cand_dir in _bundled_runtime_dir():
+        bundled = os.path.join(cand_dir, binary)
+        if os.path.isfile(bundled):
+            # Na Windowsie os.X_OK zwraca True dla każdego pliku, więc warunek
+            # uproszczony do isfile (executable bit i tak nieprzenośny w NTFS).
+            logger.info("yt-dlp JS runtime: deno (bundled) → %s", bundled)
+            return {"js_runtimes": {"deno": {"path": bundled}}, "remote_components": {"ejs:github"}}
+
+    # 2) PATH fallback
+    for rt, bin_name in [("deno", "deno"), ("node", "node"), ("bun", "bun"), ("quickjs", "qjs")]:
+        path = shutil.which(bin_name)
         if path:
-            logger.info("yt-dlp JS runtime: %s → %s", rt, path)
+            logger.info("yt-dlp JS runtime: %s (PATH) → %s", rt, path)
             return {"js_runtimes": {rt: {"path": path}}, "remote_components": {"ejs:github"}}
-    logger.info("yt-dlp: no JS runtime found — YouTube quality may be limited")
+
+    logger.warning("yt-dlp: BRAK JS runtime — YouTube nsig nie zadziała, ryzyko HTTP 403")
     return {}
 
 
