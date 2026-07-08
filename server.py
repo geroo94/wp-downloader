@@ -16,17 +16,19 @@ import json
 import logging
 import re
 import subprocess
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 import sys
 import os
 
+from cutter import CutterJob, CutterManager
 from download_manager import DownloadManager
 from environment_manager import collect_system_info
 from obs_controller import OBSController
@@ -297,6 +299,25 @@ def _fetch_m3u8_from_page(url: str) -> list[dict]:
 # Shared singletons — one per app process
 _obs = OBSController()
 _proxy = StreamlinkProxy()
+_cutter = CutterManager()
+
+# Aktywne ffmpeg pipe transkodujące live preview dla Fast Cutter.
+# Klucz = session_id z frontendu. Każde nowe żądanie tej samej sesji
+# (np. przy seek) zabija poprzedni proces przed spawn nowego.
+_cutter_live_procs: dict[str, asyncio.subprocess.Process] = {}
+
+
+async def _kill_cutter_live_proc(session: str) -> None:
+    proc = _cutter_live_procs.pop(session, None)
+    if proc and proc.returncode is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
 
 
 class OBSConnectRequest(BaseModel):
@@ -315,9 +336,13 @@ def create_app(manager: DownloadManager) -> FastAPI:
     """
     Fabryka aplikacji FastAPI.
     Przyjmuje managera i zwraca gotową aplikację.
-    
+
     Używamy wzorca "fabryki" zamiast globalnej zmiennej — łatwiej testować.
     """
+
+    # Wstrzyknij DownloadManager do CutterManager żeby postęp renderu leciał
+    # przez update_task → WebSocket → karta w Historii pobierania.
+    _cutter._manager = manager
 
     # lifespan = co robić przy starcie i zatrzymaniu serwera
     @asynccontextmanager
@@ -337,6 +362,17 @@ def create_app(manager: DownloadManager) -> FastAPI:
         yield
 
         worker.stop()
+
+        # Fast Cutter teardown — zabij live-transcodery preview i aktywne
+        # rendery, żeby zamknięcie aplikacji nie zostawiało sierot ffmpeg.
+        for session in list(_cutter_live_procs):
+            await _kill_cutter_live_proc(session)
+        for job in _cutter.jobs.values():
+            if job.proc and job.proc.returncode is None:
+                try:
+                    job.proc.kill()
+                except Exception:
+                    pass
 
     app = FastAPI(
         title="WP Downloader API",
@@ -616,6 +652,463 @@ def create_app(manager: DownloadManager) -> FastAPI:
         except Exception as e:
             logger.warning("reveal: subprocess failed: %s (path=%r)", e, path)
             return JSONResponse({"error": str(e)}, status_code=500)
+
+    # ── Fast Cutter ────────────────────────────────────────────────────
+
+    _CUTTER_MIME = {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".mkv": "video/x-matroska",
+        ".webm": "video/webm",
+    }
+
+    @app.get("/api/cutter/info")
+    async def cutter_info(path: str):
+        """Metadane pliku (duration + wideo stream) przez ffprobe.
+
+        Frontend wywołuje raz przy ładowaniu pliku żeby ustawić slider.max
+        i tc-total. Alternatywa dla `<video>.duration` (który nie działa gdy
+        Chromium w PyQt6-WebEngine nie ma H.264 codec).
+        """
+        if not os.path.isfile(path):
+            return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
+        cmd = ["ffprobe", "-v", "error",
+               "-show_entries", "format=duration:stream=width,height,codec_name",
+               "-select_streams", "v:0",
+               "-of", "json", path]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, err = await proc.communicate()
+            if proc.returncode != 0:
+                return JSONResponse({"error": err.decode("utf-8", "replace")}, status_code=500)
+            data = json.loads(out.decode("utf-8"))
+            fmt = data.get("format", {})
+            vs = (data.get("streams") or [{}])[0]
+            return JSONResponse({
+                "duration": float(fmt.get("duration", 0) or 0),
+                "width": int(vs.get("width", 0) or 0),
+                "height": int(vs.get("height", 0) or 0),
+                "codec": vs.get("codec_name", ""),
+            })
+        except FileNotFoundError:
+            return JSONResponse({"error": "ffprobe brak w PATH"}, status_code=500)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.get("/api/cutter/frame")
+    async def cutter_frame(path: str, t: float = 0.0, w: int = 960):
+        """Pojedyncza klatka JPG w czasie t (sekundy).
+
+        `-ss` przed `-i` = fast seek na najbliższą keyframę. `-frames:v 1`
+        gwarantuje jedną klatkę. `-vf scale=W:-2` skaluje do zadanej szerokości
+        zachowując aspect. Chromium akceptuje image/jpeg natywnie — brak
+        H264 codec issue z playera.
+        """
+        if not os.path.isfile(path):
+            return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
+        t = max(0.0, float(t))
+        w = max(160, min(1920, int(w)))
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+               "-ss", f"{t:.3f}", "-i", path,
+               "-frames:v", "1", "-vf", f"scale={w}:-2",
+               "-f", "mjpeg", "-q:v", "3", "pipe:1"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, err = await proc.communicate()
+            if proc.returncode != 0 or not out:
+                return JSONResponse(
+                    {"error": err.decode("utf-8", "replace") or "ffmpeg failed"},
+                    status_code=500,
+                )
+            return Response(
+                content=out,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-store"},
+            )
+        except FileNotFoundError:
+            return JSONResponse({"error": "ffmpeg brak w PATH"}, status_code=500)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.get("/api/cutter/live-stream")
+    async def cutter_live_stream(path: str, start: float = 0.0, session: str = "default",
+                                 logo_src: str = "", logo_custom: str = "",
+                                 logo_pos: str = "tr", logo_scale: float = 0.16,
+                                 logo_x: int = 20, logo_y: int = 20,
+                                 vol: float = 1.0, sub: int = 0,
+                                 src: str = "", src_size: int = 28,
+                                 src_pos: str = "tl",
+                                 source_x: int = 24, source_y: int = 24):
+        """Live-transcode wideo do WebM/VP8+Opus przez pipe ffmpeg.
+
+        Chromium w PyQt6-WebEngine nie ma H264 (LGPL). VP8/Opus w WebM są
+        otwarte i dekodowane natywnie. Seek = restart ffmpeg z -ss PRZED -i
+        (poprzedni proces sesji jest zabijany). Parametr `session`
+        identyfikuje instancję UI — jeden aktywny transkode per user.
+
+        Parametry logo_* (suwaki brandingu) wstrzykują overlay logo do
+        filter_complex podglądu — user widzi na żywo dokładnie tę skalę
+        i pozycję, która trafi do finalnego renderu.
+        """
+        if not os.path.isfile(path):
+            return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
+        start = max(0.0, float(start))
+
+        await _kill_cutter_live_proc(session)
+
+        # Rozwiązanie pliku logo jak w renderze (default z bundla / custom user)
+        logo_file = ""
+        if logo_src == "default":
+            from cutter import _default_logo_path
+            p = _default_logo_path()
+            logo_file = p if os.path.isfile(p) else ""
+        elif logo_src == "custom" and logo_custom and os.path.isfile(logo_custom):
+            logo_file = logo_custom
+
+        # Nakładka suba w podglądzie: animacja leci od bieżącej pozycji
+        # strumienia (nie od znaczników cięcia — te żyją po stronie klienta).
+        # Cel: user widzi na żywo jak animacja komponuje się z materiałem;
+        # dokładne okna czasowe stosuje dopiero finalny render.
+        from cutter import (_bundled_ffmpeg, _default_sub_path,
+                            _drawtext_fontfile, _filter_path_escape)
+        sub_file = _default_sub_path() if int(sub) else ""
+        if sub_file and not os.path.isfile(sub_file):
+            sub_file = ""
+
+        # Tekst źródła w podglądzie (statyczny — typewriter to efekt startu
+        # klipu, w strumieniu od dowolnej pozycji pokazujemy pełny napis,
+        # żeby suwaki rozmiaru/pozycji działały na żywo).
+        src_txt = (src or "").strip()[:80]
+        ffmpeg_bin = "ffmpeg"
+        if src_txt:
+            if not await _cutter._has_filter("drawtext"):
+                alt = _bundled_ffmpeg()
+                if alt and await _cutter._has_filter("drawtext", alt):
+                    ffmpeg_bin = alt
+                else:
+                    src_txt = ""  # brak drawtext gdziekolwiek — podgląd bez tekstu
+
+        cmd = [
+            ffmpeg_bin, "-hide_banner", "-loglevel", "error",
+            "-ss", f"{start:.3f}", "-i", path,
+        ]
+        if logo_file or sub_file or src_txt:
+            # Podgląd renderuje w 480p — skalę/marginesy z suwaków (podane
+            # względem pikseli źródła) przeliczamy proporcjonalnie.
+            meta = await _cutter._probe_media(path)
+            pw = max(2, round(480 * meta["w"] / max(1, meta["h"]) / 2) * 2)
+            fc_parts = ["[0:v]scale=-2:480[v0]"]
+            cur = "[v0]"
+            in_idx = 1
+            if logo_file:
+                cmd += ["-i", logo_file]
+                if logo_src == "default":
+                    # Bazowe logo 1920x1080: skala 100% + zerowe marginesy
+                    # = fullframe od 0:0. Suwaki w pełni aktywne — skala
+                    # pomniejsza grafikę (kotwica: prawy górny róg, tam
+                    # siedzi znak), X/Y odsuwają od krawędzi. Identyczne
+                    # mapowanie jak w finalnym renderze (_cmd_branded).
+                    s = min(1.0, max(0.05, float(logo_scale)))
+                    lw = max(32, round(pw * s))
+                    lh = max(18, round(480 * s))
+                    dmx = max(0, round(int(logo_x) * pw / 1920))
+                    dmy = max(0, round(int(logo_y) * 480 / 1080))
+                    fc_parts.append(f"[{in_idx}:v]scale={lw}:{lh}:"
+                                    f"force_original_aspect_ratio=decrease[lg]")
+                    fc_parts.append(f"{cur}[lg]overlay=W-w-{dmx}:{dmy}:format=auto[vl]")
+                else:
+                    scale = min(0.40, max(0.05, float(logo_scale)))
+                    lw = max(16, round(pw * scale))
+                    mx = max(0, round(int(logo_x) * pw / max(1, meta["w"])))
+                    my = max(0, round(int(logo_y) * 480 / max(1, meta["h"])))
+                    pos = _cutter._pos_overlay(logo_pos, mx, my)
+                    fc_parts.append(f"[{in_idx}:v]scale={lw}:-1[lg]")
+                    fc_parts.append(f"{cur}[lg]overlay={pos}:format=auto[vl]")
+                cur = "[vl]"
+                in_idx += 1
+            if sub_file:
+                cmd += ["-i", sub_file]
+                fc_parts.append(
+                    f"[{in_idx}:v]scale={pw}:480:force_original_aspect_ratio=decrease,"
+                    f"pad={pw}:480:(ow-iw)/2:(oh-ih)/2:color=black@0.0,"
+                    f"setpts=PTS-STARTPTS[sb]")
+                fc_parts.append(f"{cur}[sb]overlay=0:0:eof_action=pass:format=auto[vsb]")
+                cur = "[vsb]"
+                in_idx += 1
+            if src_txt:
+                # Sanityzacja identyczna z renderem (parser opcji drawtext).
+                clean = (src_txt.replace("\\", "").replace("'", "’")
+                                .replace(";", ",")
+                                .replace(":", r"\:").replace("%", r"\%"))
+                fsize = max(9, round(min(96, max(12, int(src_size))) * 480 / 1080))
+                smx = max(0, round(max(0, int(source_x)) * pw / 1920))
+                smy = max(0, round(max(0, int(source_y)) * 480 / 1080))
+                sp = src_pos if src_pos in ("tl", "tr", "bl", "br") else "tl"
+                sxy = {
+                    "tl": f"x={smx}:y={smy}",
+                    "tr": f"x=w-tw-{smx}:y={smy}",
+                    "bl": f"x={smx}:y=h-th-{smy}",
+                    "br": f"x=w-tw-{smx}:y=h-th-{smy}",
+                }[sp]
+                ff = _filter_path_escape(_drawtext_fontfile())
+                fc_parts.append(
+                    f"{cur}drawtext=fontfile='{ff}':text='{clean}':"
+                    f"fontcolor=white:fontsize={fsize}:bordercolor=black:"
+                    f"borderw=2:{sxy}[vtxt]")
+                cur = "[vtxt]"
+            # format=yuv420p po overlay'ach jest obowiązkowy: RGBA logo /
+            # CineForm z alfą negocjują format, którego libvpx nie otwiera
+            # (enkoder padał "Could not open encoder" → pusty strumień).
+            fc_parts.append(f"{cur}format=yuv420p[vout]")
+            cmd += ["-filter_complex", ";".join(fc_parts),
+                    "-map", "[vout]", "-map", "0:a?"]
+        else:
+            cmd += ["-vf", "scale=-2:480"]
+
+        # Mixer w podglądzie: -af działa na zmapowanym audio niezależnie
+        # od video filter_complex.
+        vol = min(2.0, max(0.0, float(vol)))
+        if abs(vol - 1.0) >= 0.01:
+            cmd += ["-af", f"volume={vol:.3f}"]
+        cmd += [
+            "-c:v", "libvpx",
+            "-deadline", "realtime",
+            "-cpu-used", "8",
+            "-b:v", "1M",
+            "-c:a", "libopus",
+            "-b:a", "96k",
+            "-f", "webm",
+            # 2 MB / 2000 ms klastry — dłuższe fragmenty pozwalają Chromium
+            "-cluster_size_limit", "2M",
+            "-cluster_time_limit", "2000",
+            "-fflags", "+nobuffer",
+            "-flush_packets", "1",
+            "pipe:1",
+        ]
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            return JSONResponse({"error": "ffmpeg brak w PATH"}, status_code=500)
+
+        _cutter_live_procs[session] = proc
+
+        async def _gen():
+            assert proc.stdout
+            try:
+                while True:
+                    chunk = await proc.stdout.read(16 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                if proc.returncode is None:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                _cutter_live_procs.pop(session, None)
+
+        return StreamingResponse(
+            _gen(),
+            media_type="video/webm",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/api/cutter/live-stop")
+    async def cutter_live_stop(session: str = "default"):
+        """Zabija ffmpeg live-transcoder dla sesji (JS wywołuje na reset / tab-switch)."""
+        await _kill_cutter_live_proc(session)
+        return JSONResponse({"stopped": True})
+
+    @app.get("/api/cutter/preview")
+    @app.get("/api/cutter/stream")
+    async def cutter_preview(path: str, request: Request):
+        """Stream lokalnego pliku wideo do <video> w QtWebEngine.
+
+        Chromium wysyła `Range: bytes=0-` w pierwszym żądaniu metadata.
+        Bez 206 Partial Content + jawnego Accept-Ranges/Content-Range video
+        zostaje w stanie readyState=0 (czarny ekran, brak `loadedmetadata`).
+        FileResponse Starlette nie zawsze respektuje Range w QtWebEngine —
+        ręczny StreamingResponse gwarantuje poprawną sekwencję nagłówków.
+        """
+        if not os.path.isfile(path):
+            return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
+
+        ext = os.path.splitext(path)[1].lower()
+        mime = _CUTTER_MIME.get(ext, "video/mp4")
+        file_size = os.path.getsize(path)
+        range_header = request.headers.get("range")
+
+        CHUNK = 64 * 1024
+
+        if range_header and range_header.startswith("bytes="):
+            rng = range_header[6:]
+            start_s, _, end_s = rng.partition("-")
+            try:
+                start = int(start_s) if start_s else 0
+                end = int(end_s) if end_s else file_size - 1
+            except ValueError:
+                return JSONResponse({"error": "Bad Range"}, status_code=416)
+            end = min(end, file_size - 1)
+            if start > end or start >= file_size:
+                return JSONResponse({"error": "Range not satisfiable"}, status_code=416)
+            length = end - start + 1
+
+            def _iter_range():
+                with open(path, "rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(CHUNK, remaining))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        yield chunk
+
+            return StreamingResponse(
+                _iter_range(),
+                status_code=206,
+                media_type=mime,
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Range": f"bytes {start}-{end}/{file_size}",
+                    "Content-Length": str(length),
+                    "Cache-Control": "no-store",
+                },
+            )
+
+        def _iter_full():
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(CHUNK)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        return StreamingResponse(
+            _iter_full(),
+            media_type=mime,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+                "Cache-Control": "no-store",
+            },
+        )
+
+    class CutterRenderRequest(BaseModel):
+        input_path: str
+        start_ts: float
+        end_ts: float
+        logo_src: str = ""
+        logo_pos: str = "tr"
+        logo_custom_path: str = ""
+        # Suwaki brandingu: skala 0.05–0.40 (ułamek szerokości), marginesy px
+        logo_scale: float = 0.16
+        logo_x: int = 20
+        logo_y: int = 20
+        src_text: str = ""
+        # Formatowanie źródła: rozmiar (px @1080p), narożnik (tl bazowy)
+        # i marginesy X/Y od narożnika (suwaki Pozycja X/Y źródła)
+        src_size: int = 28
+        src_pos: str = "tl"
+        src_x: int = 24
+        src_y: int = 24
+        outro_src: str = ""
+        outro_custom_path: str = ""
+        # Overlap outro w sekundach (0–3): overlay z alfą przed końcem filmu
+        outro_overlap: float = 0.0
+        # Mixer: głośność głównego materiału 0.0–2.0 (1.0 = bez zmian)
+        audio_volume: float = 1.0
+        # Animowany przycisk subskrypcji na starcie i przed tyłówką
+        sub_overlay: bool = False
+        # Jeśli podane (user wybrał SaveAs w UI), nadpisuje auto-generated
+        # path w CutterManager._output_path. Pusty = zapisz obok źródła.
+        output_path: str = ""
+
+    @app.post("/api/cutter/render")
+    async def cutter_render(req: CutterRenderRequest):
+        if not os.path.isfile(req.input_path):
+            return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
+        if req.end_ts <= req.start_ts:
+            return JSONResponse({"error": "Zły zakres czasu (koniec musi być po starcie)"}, status_code=400)
+        request_id = uuid.uuid4().hex
+
+        # Tytuł dla karty w Historii pobierania: nazwa pliku wynikowego lub źródła
+        display_target = (req.output_path or req.input_path)
+        display_title = f"{os.path.basename(display_target)} (cut)"
+
+        # Rejestruj render-task w DownloadManager — pojawi się jako karta w UI,
+        # WebSocket task_update będzie leciał z CutterManager._emit().
+        dm_task_id = manager.add_render_task(
+            title=display_title,
+            output_path=(req.output_path or ""),
+        )
+
+        job = CutterJob(
+            request_id=request_id,
+            input_path=req.input_path,
+            start_ts=float(req.start_ts),
+            end_ts=float(req.end_ts),
+            logo_src=req.logo_src,
+            logo_pos=req.logo_pos,
+            logo_custom_path=req.logo_custom_path,
+            logo_scale=min(0.40, max(0.05, float(req.logo_scale or 0.16))),
+            logo_x=min(1000, max(0, int(req.logo_x))),
+            logo_y=min(1000, max(0, int(req.logo_y))),
+            src_text=req.src_text,
+            src_size=min(96, max(12, int(req.src_size or 28))),
+            src_pos=(req.src_pos if req.src_pos in ("tl", "tr", "bl", "br") else "tl"),
+            src_x=min(1000, max(0, int(req.src_x))),
+            src_y=min(1000, max(0, int(req.src_y))),
+            outro_src=req.outro_src,
+            outro_custom_path=req.outro_custom_path,
+            outro_overlap=min(3.0, max(0.0, float(req.outro_overlap or 0.0))),
+            audio_volume=min(2.0, max(0.0, float(req.audio_volume
+                                                 if req.audio_volume is not None else 1.0))),
+            sub_overlay=bool(req.sub_overlay),
+            output_path=(req.output_path or ""),
+            download_task_id=dm_task_id,
+        )
+        mode = await _cutter.start(job)
+
+        # Pierwszy broadcast — pojawia się karta w renderTasks bez czekania na progres
+        await manager.update_task(dm_task_id, progress=0.0)
+
+        return JSONResponse({
+            "request_id": request_id,
+            "download_task_id": dm_task_id,
+            "mode": mode,
+            "output_path": job.output_path,
+        })
+
+    @app.get("/api/cutter/status")
+    async def cutter_status(id: str):
+        job = _cutter.jobs.get(id)
+        if not job:
+            return JSONResponse({"error": "Job nie istnieje"}, status_code=404)
+        return JSONResponse({
+            "status": job.status,
+            "progress": job.progress,
+            "speed": job.speed,
+            "output_path": job.output_path,
+            "error": job.error,
+        })
 
     @app.post("/api/download")
     async def start_download(req: DownloadRequest):

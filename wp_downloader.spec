@@ -2,7 +2,21 @@
 import os as _os
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('static', 'static')]
+# Cały frontend (index.html, JS, logo) + branding Fast Cuttera.
+# ('static', 'static') kopiuje pełne drzewo, ale branding ma jawny wpis
+# i twardą asercję — build ma się wywalić od razu, jeśli domyślne
+# logo/outro zniknęły z repo, zamiast produkować apkę z niedziałającym
+# brandingiem w Fast Cutterze.
+_branding_dir = _os.path.join(_os.path.dirname(SPEC), "static", "branding")
+for _asset in ("default_logo.png", "default_outro.mp4", "sub_button.mov",
+               _os.path.join("fonts", "Gilroy-SemiBold.ttf")):
+    assert _os.path.isfile(_os.path.join(_branding_dir, _asset)), \
+        f"Brak zasobu brandingu: static/branding/{_asset}"
+
+datas = [
+    ('static', 'static'),
+    (_os.path.join('static', 'branding'), _os.path.join('static', 'branding')),
+]
 # Deno binary (bin/deno[.exe]) jest pobierany przez workflow / lokalny build skrypt
 # i pakowany jako data. Na .app (mac) trafia do Contents/Resources/bin/,
 # na onedir (Win) do bin/ obok exe. yt_dlp_worker._detect_js_runtime() szuka
@@ -29,8 +43,54 @@ tmp_ret = collect_all('PyQt6')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('streamlink')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# ── Whisper + torch — transkrypcja jest częścią buildu produkcyjnego ──
+# Twarda asercja zamiast cichego pominięcia: status "whisper: brak" w stopce
+# wynikał z buildu bez pakietu. Build ma się wywalić, jeśli venv nie ma
+# openai-whisper (pip install -r requirements.txt).
+import importlib.util as _ilu
+assert _ilu.find_spec("whisper"), (
+    "openai-whisper nie jest zainstalowany w środowisku builda — "
+    "uruchom: .venv/bin/pip install openai-whisper"
+)
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
+# collect_all('whisper') zabiera też whisper/assets (mel_filters.npz oraz
+# pliki tokenizera gpt2.tiktoken / multilingual.tiktoken) jako datas.
 tmp_ret = collect_all('whisper')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# tiktoken rejestruje enkodery przez namespace-package tiktoken_ext skanowany
+# w runtime — PyInstaller nie widzi tego importu statycznie. Bez
+# tiktoken_ext.openai_public whisper pada na get_encoding() dopiero przy
+# pierwszej transkrypcji.
+tmp_ret = collect_all('tiktoken')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+hiddenimports += [
+    'whisper', 'torch', 'tqdm', 'regex', 'numba', 'llvmlite',
+    'tiktoken', 'tiktoken_ext', 'tiktoken_ext.openai_public',
+]
+# Statyczna binarka ffmpeg z imageio-ffmpeg — fallback renderu tekstu
+# źródła (drawtext/sendcmd), gdy systemowy ffmpeg jest okrojony
+# (np. brew bez libfreetype). cutter._bundled_ffmpeg() znajduje ją
+# w spakowanym pakiecie przez imageio_ffmpeg.get_ffmpeg_exe().
+assert _ilu.find_spec("imageio_ffmpeg"), (
+    "imageio-ffmpeg nie jest zainstalowany w środowisku builda — "
+    "uruchom: .venv/bin/pip install imageio-ffmpeg"
+)
+tmp_ret = collect_all('imageio_ffmpeg')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+hiddenimports.append('imageio_ffmpeg')
+
+# Opcjonalne backendy AI (faster-whisper/tokenizers) — pakowane tylko gdy
+# faktycznie zainstalowane; hiddenimport nieistniejącego pakietu generuje
+# jedynie mylące warningi w logu builda.
+for _opt_ai in ("faster_whisper", "tokenizers"):
+    if _ilu.find_spec(_opt_ai):
+        tmp_ret = collect_all(_opt_ai)
+        datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+        hiddenimports.append(_opt_ai)
+# Dylib-y / frameworki torcha (libtorch, libc10, libomp…) jawnie do binaries —
+# oficjalny hook contrib je łapie, ale jawna mapa jest odporna na regresje.
+binaries += collect_dynamic_libs('torch')
 
 
 a = Analysis(

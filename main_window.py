@@ -210,6 +210,11 @@ class MainWindow(QMainWindow):
         self._profile.setPersistentCookiesPolicy(
             QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies
         )
+        # HTTP cache off — nasz index.html/JS/CSS jest podawany przez lokalny
+        # uvicorn i musi być zawsze świeży po update aplikacji. Bez tego Chromium
+        # trzyma stary HTML w ~/Library/Caches/WP Downloader/QtWebEngine/ nawet
+        # gdy bundle został podmieniony (widoczne po dodaniu nowych zakładek).
+        self._profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.NoCache)
         _page = QWebEnginePage(self._profile, self.web_view)
         self.web_view.setPage(_page)
 

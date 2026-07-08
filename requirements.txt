@@ -8,3 +8,4 @@ pydantic
 pyinstaller
 streamlink
 openai-whisper
+imageio-ffmpeg

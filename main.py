@@ -37,32 +37,51 @@ from PyQt6.QtCore import Qt
 _single_instance_socket = None
 
 
-def acquire_single_instance_lock(server_port: int = 8765, lock_port: int = 49327) -> bool:
-    """Returns True if this is the only instance (proceed with startup).
-       Returns False if another instance is already running (caller should exit).
+def acquire_single_instance_lock(server_port: int = 8765, lock_port: int = 49327) -> str:
+    """Zwraca status startu pojedynczej instancji:
+         "ok"      — jesteśmy jedyną instancją, można startować
+         "running" — działa już inna instancja WP Downloader
+         "busy"    — port serwera okupuje OBCY proces (nie nasza aplikacja)
 
-       Strategy: TCP-probe the actual server port first (catches the case where the
-       first instance is fully up). Then bind a UDP lock port to win the race when
-       two instances start simultaneously (the FFmpeg-download window in particular)."""
+       Strategia: najpierw race-free lock na porcie UDP (jeden proces trzyma
+       go przez cały lifetime — wygrywa wyścig przy podwójnym double-clicku).
+       Potem fingerprint HTTP na porcie serwera: sam TCP-connect NIE wystarcza,
+       bo dowolny inny serwer na 8765 (np. deweloperski uvicorn) wyglądał jak
+       "druga instancja" i aplikacja znikała bez komunikatu — dla użytkownika
+       nieodróżnialne od crash on boot."""
     import socket
-    # Is the server already responding? Then another instance is fully up.
-    try:
-        with socket.create_connection(("127.0.0.1", server_port), timeout=0.5):
-            return False
-    except (OSError, socket.timeout):
-        pass
+    import json as _json
+    import urllib.error
+    import urllib.request
 
-    # Race-free claim: only one process can hold this UDP port at a time.
+    # 1. Race-free claim: tylko jeden proces może trzymać ten UDP port.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.bind(("127.0.0.1", lock_port))
     except OSError:
         s.close()
-        return False
-
+        return "running"
     global _single_instance_socket
     _single_instance_socket = s  # keep alive for the whole process lifetime
-    return True
+
+    # 2. Ktoś już serwuje na porcie aplikacji? Sprawdź, CZYM jest.
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{server_port}/api/system-info", timeout=1.5) as r:
+            data = _json.load(r)
+        if isinstance(data, dict) and "app_version" in data:
+            # Odpowiada jak WP Downloader (np. instancja innego użytkownika
+            # albo stary proces sprzed wprowadzenia UDP locka).
+            return "running"
+        return "busy"
+    except urllib.error.HTTPError:
+        # Port gada HTTP, ale to nie nasze API → obcy serwer.
+        return "busy"
+    except Exception:
+        # Brak odpowiedzi HTTP = port wolny. Jeżeli trzyma go proces nie-HTTP,
+        # uvicorn zgłosi błąd bind — złapie go error-path AppController
+        # (widoczna strona błędu zamiast cichego zniknięcia).
+        return "ok"
 
 
 def setup_overlay_site_packages():
@@ -280,9 +299,41 @@ if __name__ == "__main__":
 
         # Single-instance guard: prevents the WebView from staring at a dead port
         # when the user double-clicks the EXE during the FFmpeg download window.
-        if not acquire_single_instance_lock():
-            logging.info("Inna instancja WP Downloader już działa — kończę proces.")
+        _instance_status = acquire_single_instance_lock()
+        if _instance_status != "ok":
+            logging.info("Single-instance guard: %s — kończę proces.", _instance_status)
+            # Widoczny komunikat zamiast cichego exit(0) — ciche zniknięcie
+            # procesu było zgłaszane jako "crash on boot".
+            _dlg_app = QApplication(sys.argv)
+            if _instance_status == "running":
+                QMessageBox.information(
+                    None, "WP Downloader",
+                    "WP Downloader już działa.\n\n"
+                    "Sprawdź Dock / zasobnik systemowy — okno mogło zostać "
+                    "zminimalizowane lub ukryte.",
+                )
+            else:  # "busy" — obcy proces na porcie serwera
+                QMessageBox.critical(
+                    None, "WP Downloader — port zajęty",
+                    "Port 127.0.0.1:8765 jest zajęty przez inny program, "
+                    "więc lokalny serwer aplikacji nie może wystartować.\n\n"
+                    "Zamknij program nasłuchujący na porcie 8765 "
+                    "(w Terminalu: lsof -nP -iTCP:8765) i uruchom "
+                    "WP Downloader ponownie.",
+                )
             sys.exit(0)
+
+        # Chromium flags — MUST be set before QApplication init.
+        # `--autoplay-policy=no-user-gesture-required` pozwala <video>.play()
+        # bez wcześniejszej interakcji użytkownika (Fast Cutter automatyczne
+        # ładowanie po drop). `--proprietary-codecs` aktywuje H.264/AAC w Qt
+        # buildach które kompilują codec ale wyłączają domyślnie flagą runtime;
+        # jeśli PyQt6-WebEngine wheel nie ma codec w binarce — flaga jest no-op.
+        _existing_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
+        _flags = "--autoplay-policy=no-user-gesture-required --proprietary-codecs"
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+            f"{_existing_flags} {_flags}".strip()
+        )
 
         # 2. Inicjalizacja GUI z łapaniem błędów binarnych
         logging.info("Ładowanie modułów QtWebEngine...")

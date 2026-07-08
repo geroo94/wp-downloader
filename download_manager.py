@@ -25,6 +25,9 @@ class DownloadTask:
     cookies_browser: str = ""  # "chrome" / "firefox" / "safari" / "edge" / ""
     cookies_file: str = ""  # ścieżka do wyeksportowanego cookies.txt (priorytet nad browser)
     speed_str: str = ""
+    # "download" (yt-dlp/live) | "render" (Fast Cutter ffmpeg render).
+    # renderTasks() w JS wybiera layout karty na podstawie tego pola.
+    job_type: str = "download"
 
 
 class DownloadManager:
@@ -116,6 +119,25 @@ class DownloadManager:
             asyncio.create_task(self._worker.dispatch(task))
         return task_id
 
+    def add_render_task(self, title: str, output_path: str) -> str:
+        """Rejestruje task typu 'render' (Fast Cutter) w store.
+
+        Odróżnia się od add_task: nie dispatch'uje do yt-dlp worker'a — CutterManager
+        prowadzi ffmpeg sam. Manager pełni tylko rolę store'u + WebSocket broadcast."""
+        task_id = str(uuid.uuid4())[:8]
+        task = DownloadTask(
+            task_id=task_id,
+            url="",
+            format_id="",
+            quality="",
+            title=title,
+            status="rendering",
+            output_path=(output_path or "").strip(),
+            job_type="render",
+        )
+        self.tasks[task_id] = task
+        return task_id
+
     def get_all_tasks(self) -> list:
         return [
             {
@@ -133,6 +155,7 @@ class DownloadManager:
             "live_status": t.live_status,
             "transcription": t.transcription,
             "speed_str": t.speed_str,
+            "job_type": t.job_type,
             }
             for t in self.tasks.values()
         ]
@@ -168,4 +191,5 @@ class DownloadManager:
             "live_status": task.live_status,
             "transcription": task.transcription,
             "speed_str": task.speed_str,
+            "job_type": task.job_type,
         })

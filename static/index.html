@@ -289,13 +289,13 @@
       letter-spacing: -0.01em;
       transition: background 0.15s, border-color 0.15s, transform 0.1s var(--ease-spring);
     }
-    .btn-header-update:hover { background: var(--bg); border-color: #D0D0CC; color: var(--text-1); }
+    .btn-header-update:hover { background: var(--bg); border-color: var(--text-3); color: var(--text-1); }
     .btn-header-update:active { transform: scale(0.96); }
     .btn-header-update:disabled { opacity: 0.45; cursor: not-allowed; }
     .header-logo { height: 30px; width: auto; display: block; opacity: 0.92; }
 
     /* ── Main ────────────────────────────────────────── */
-    .main { max-width: 820px; margin: 0 auto; padding: 22px 20px; }
+    .main { max-width: 960px; margin: 0 auto; padding: 24px 22px; }
 
     /* ── Card ────────────────────────────────────────── */
     .card {
@@ -351,7 +351,7 @@
       letter-spacing: -0.01em;
       transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s var(--ease-spring);
     }
-    .btn-secondary:hover { background: var(--surf-muted); border-color: #D0D0CC; color: var(--text-1); }
+    .btn-secondary:hover { background: var(--surf-muted); border-color: var(--text-3); color: var(--text-1); }
     .btn-secondary:active { transform: scale(0.97); }
 
     .opts-row { display: flex; gap: 10px; align-items: center; }
@@ -429,7 +429,7 @@
     .task:hover {
       background: var(--surf-hover);
       transform: translateY(-1px);
-      border-color: #D0D0CC;
+      border-color: var(--text-3);
       box-shadow: 0 4px 14px rgba(0,0,0,.06);
     }
     [data-theme="dark"] .task:hover {
@@ -498,9 +498,20 @@
       height: 3px; border-radius: 99px; width: 0%;
     }
     .progress-bar.downloading { background: var(--red); }
+    .progress-bar.rendering   { background: var(--red); }
     .progress-bar.done        { background: #22c55e; }
     .progress-bar.error       { background: #f97316; }
     .progress-bar.cancelled   { background: #D1D5DB; }
+
+    /* Fast Cutter render — karta w Historii pobierania */
+    .task-thumb-render {
+      background: rgba(227,0,15,.08) !important;
+    }
+    .task-thumb-render svg {
+      stroke: var(--red) !important;
+      width: 20px !important; height: 20px !important;
+      stroke-width: 2 !important;
+    }
 
     /* Speed / ETA text under progress bar */
     .dl-speed {
@@ -789,6 +800,283 @@
     .acc.open .acc-chev { transform: rotate(180deg); }
     .acc-body { height: 0; overflow: hidden; }
     .acc-inner { padding-top: 14px; }
+
+    /* ── Fast Cutter ────────────────────────────────────────────────── */
+    .cutter-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; }
+    @media (max-width: 900px) { .cutter-grid { grid-template-columns: 1fr; } }
+    .cutter-left, .cutter-right { display: flex; flex-direction: column; gap: 14px; }
+    .cutter-dropzone {
+      border: 2px dashed var(--border); border-radius: 12px;
+      padding: 44px 20px; text-align: center; cursor: pointer;
+      color: var(--text-3);
+      transition: border-color .18s ease, background .18s ease, color .18s ease;
+    }
+    .cutter-dropzone:hover { border-color: var(--text-3); color: var(--text-2); }
+    .cutter-dropzone.dragover { border-color: var(--red); background: rgba(227,0,15,.05); color: var(--red); }
+    .cutter-dropzone .dz-title { font-size: 14px; font-weight: 700; color: var(--text-1); margin-top: 10px; letter-spacing: -0.01em; }
+    .cutter-dropzone .dz-hint { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+    .cutter-video-wrap {
+      position: relative;
+      width: 100%;
+      max-height: 480px;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    #cutter-video {
+      width: 100%; height: 100%;
+      object-fit: contain; display: block; background: #000;
+    }
+    .cutter-video-loader {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,.35);
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+    .cutter-video-loader[hidden] { display: none; }
+    .cutter-video-loader::after {
+      content: ""; width: 22px; height: 22px;
+      border: 2px solid rgba(255,255,255,.25);
+      border-top-color: var(--red);
+      border-radius: 50%;
+      animation: cutter-spin .8s linear infinite;
+    }
+    @keyframes cutter-spin { to { transform: rotate(360deg); } }
+    /* Customowa oś czasu — wypełnienie do bieżącej pozycji przez var(--fill),
+       malowane z JS (_cutterPaintSlider). Track rośnie na hover jak w
+       playerach premium. */
+    .cutter-slider {
+      width: 100%;
+      -webkit-appearance: none; appearance: none;
+      height: 6px; border-radius: 3px;
+      background: linear-gradient(to right,
+        var(--red) var(--fill, 0%), var(--surf-track) var(--fill, 0%));
+      outline: none; margin: 12px 0 4px;
+      cursor: pointer;
+      transition: height .18s var(--ease-spring);
+    }
+    .cutter-slider:hover { height: 8px; }
+    .cutter-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--red); cursor: pointer;
+      border: 2px solid #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,.25);
+      transition: transform .15s var(--ease-spring), box-shadow .15s ease;
+    }
+    .cutter-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+      box-shadow: 0 2px 8px rgba(227,0,15,.35);
+    }
+    .cutter-slider::-webkit-slider-thumb:active { transform: scale(1.32); }
+
+    /* Pasek transportu playera: Play/Pauza, mute, liczniki czasu, nazwa pliku */
+    .cutter-transport {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 0 12px;
+    }
+    .cutter-ctrl-btn {
+      width: 34px; height: 34px; flex-shrink: 0; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface); color: var(--text-1); cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s, opacity .15s,
+                  transform .12s var(--ease-spring);
+    }
+    .cutter-ctrl-btn:hover { background: var(--surf-muted); border-color: var(--text-3); }
+    .cutter-ctrl-btn:active { transform: scale(0.9); }
+    #cutter-play-btn { background: var(--red); border-color: var(--red); color: #fff; }
+    #cutter-play-btn:hover { opacity: .86; background: var(--red); }
+    .cutter-transport .cutter-tc-time {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 12px; color: var(--text-2); letter-spacing: 0.02em;
+      white-space: nowrap; font-variant-numeric: tabular-nums;
+      margin-left: 4px;
+    }
+    .cutter-transport .cutter-tc-time .sep { color: var(--text-3); margin: 0 4px; }
+    .cutter-file-name {
+      flex: 1; min-width: 0;
+      font-size: 11.5px; color: var(--text-3); text-align: right;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .cutter-tc-reset { flex-shrink: 0; font-size: 12px; }
+    .cutter-marks {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .cutter-marks-inputs,
+    .cutter-marks-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .cutter-mark-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .cutter-mark-lbl {
+      font-size: 10px; font-weight: 700; color: var(--text-3);
+      text-transform: uppercase; letter-spacing: 0.08em; padding-left: 2px;
+    }
+    .cutter-marks input {
+      width: 100%;
+      height: 38px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surf-subtle); color: var(--text-1);
+      font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px;
+      text-align: center; letter-spacing: 0.02em; font-weight: 600;
+      min-width: 0;
+      transition: border-color .15s, box-shadow .15s, background .15s;
+    }
+    .cutter-marks input:focus {
+      outline: none; border-color: var(--red);
+      background: var(--surface);
+      box-shadow: 0 0 0 3px rgba(227,0,15,0.07);
+    }
+    .cutter-marks .btn-primary {
+      height: 40px; padding: 0 12px; font-size: 13px; font-weight: 700;
+      white-space: nowrap;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .cutter-marks .btn-primary .mark-arrow {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      opacity: 0.7; font-weight: 500;
+    }
+    .cutter-select, .cutter-input {
+      height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--surf-subtle); color: var(--text-1); font-family: inherit; font-size: 13px;
+      min-width: 180px;
+    }
+    .cutter-select:focus, .cutter-input:focus { outline: none; border-color: var(--red); }
+    .cutter-mode-hint { font-size: 11px; color: var(--text-3); text-align: center; margin-top: 4px; letter-spacing: 0.01em; }
+
+    /* Suwaki brandingu (skala/pozycja logo, overlap outro) */
+    .brand-slider-row { padding: 12px 0 6px; border-bottom: 1px solid var(--border); transition: opacity .2s ease; }
+    .brand-slider-row:last-child { border-bottom: none; }
+    /* Kontrolki bez zastosowania w bieżącym trybie (np. suwaki logo przy
+       bazowym fullframe) — wyszarzone i nieklikalne. */
+    .brand-slider-row.disabled, .setting-row.disabled { opacity: .4; pointer-events: none; }
+    .setting-row { transition: opacity .2s ease; }
+    .brand-slider-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; margin-bottom: 8px;
+    }
+    .brand-slider-lbl {
+      font-size: 13px; font-weight: 600; color: var(--text-1);
+      letter-spacing: -0.01em; min-width: 0;
+    }
+    .brand-slider-hint { font-size: 10.5px; font-weight: 400; color: var(--text-3); margin-left: 4px; }
+    .brand-slider-val {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11px; font-weight: 600; color: var(--text-2);
+      background: var(--surf-muted); border: 1px solid var(--border);
+      padding: 2px 8px; border-radius: 6px;
+      min-width: 56px; text-align: center; flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+      transition: color .15s, border-color .15s;
+    }
+    .brand-slider-row:has(.brand-slider:active) .brand-slider-val {
+      color: var(--red); border-color: var(--red);
+    }
+    .brand-slider {
+      width: 100%;
+      -webkit-appearance: none; appearance: none;
+      height: 4px; border-radius: 2px;
+      background: linear-gradient(to right,
+        var(--red) var(--fill, 0%), var(--surf-track) var(--fill, 0%));
+      outline: none; cursor: pointer;
+    }
+    .brand-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 13px; height: 13px; border-radius: 50%;
+      background: var(--red); cursor: pointer;
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,.25);
+      transition: transform .15s var(--ease-spring);
+    }
+    .brand-slider::-webkit-slider-thumb:hover  { transform: scale(1.18); }
+    .brand-slider::-webkit-slider-thumb:active { transform: scale(1.3); }
+
+    /* ── UI overhaul: responsywność + a11y + detale premium ─────────── */
+
+    /* Nagłówek przyklejony z lekkim blur — treść scrolluje pod spodem.
+       color-mix za @supports: starsze QtWebEngine bez color-mix zostają
+       przy pełnym var(--surface) zamiast przezroczystego tła. */
+    .header { position: sticky; top: 0; z-index: 100; }
+    @supports (background: color-mix(in srgb, red 50%, white)) {
+      .header {
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        background: color-mix(in srgb, var(--surface) 86%, transparent);
+      }
+    }
+
+    /* Klawiaturowy fokus — spójny ring w całej aplikacji. */
+    button:focus-visible, input:focus-visible, select:focus-visible,
+    .toggle-sw:focus-visible, .toggle-wait:focus-visible {
+      outline: 2px solid var(--red);
+      outline-offset: 2px;
+      border-radius: 6px;
+    }
+
+    /* Subtelne scrollbary dopasowane do motywu. */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border); border-radius: 99px;
+      border: 2px solid transparent; background-clip: padding-box;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: padding-box; }
+
+    select:hover { border-color: var(--text-3); }
+    .btn-about-link { transition: background .15s, border-color .15s, transform .1s var(--ease-spring); }
+    .btn-about-link:active { transform: scale(0.96); }
+
+    /* Długie ścieżki plików w meta zadania nie rozpychają karty. */
+    .task-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Wąskie okno (preset Kompakt 900px i węziej) — nic się nie rozjeżdża. */
+    @media (max-width: 720px) {
+      .header { padding: 0 18px; }
+      .main { padding: 18px 14px; }
+      .url-row { flex-wrap: wrap; }
+      .url-row input { min-width: 200px; }
+      .opts-row { flex-wrap: wrap; }
+      .opts-row select { min-width: 180px; }
+      .opts-row .btn-primary { flex: 1; justify-content: center; }
+      .setting-row { flex-wrap: wrap; }
+      .cutter-marks-inputs, .cutter-marks-buttons { grid-template-columns: 1fr; }
+      .cutter-transport { flex-wrap: wrap; }
+      .cutter-file-name { flex-basis: 100%; text-align: left; order: 9; }
+      .about-grid { grid-template-columns: 1fr; }
+      .about-row:nth-last-child(-n+2) { border-bottom: 1px solid var(--border); }
+      .about-row:last-child { border-bottom: none; }
+    }
+
+    /* Szanujemy systemowe "ogranicz ruch" — bez wirujących beamów i shimmerów. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* Poprawki dark theme dla twardo zakodowanych jasnych kolorów. */
+    [data-theme="dark"] .url-row input.error { background: #2D1515; }
+    [data-theme="dark"] .checkbox-container:hover input ~ .checkmark { background-color: #333; }
+    [data-theme="dark"] .task-actions .danger  { border-color: #4D1D1D; color: #FF8090; }
+    [data-theme="dark"] .task-actions .danger:hover { background: #2D1515; }
+    [data-theme="dark"] .btn-icon.green  { border-color: #14532D; color: #4ade80; }
+    [data-theme="dark"] .btn-icon.green:hover  { background: #0F2D1A; border-color: #166534; }
+    [data-theme="dark"] .btn-icon.blue   { border-color: #1E3A8A; color: #93c5fd; }
+    [data-theme="dark"] .btn-icon.blue:hover   { background: #172554; border-color: #1D4ED8; }
+    [data-theme="dark"] .btn-icon.purple { border-color: #4C1D95; color: #c4b5fd; }
+    [data-theme="dark"] .btn-icon.purple:hover { background: #2E1065; border-color: #6D28D9; }
+    [data-theme="dark"] .btn-icon.red    { border-color: #4D1D1D; color: #FF8090; }
+    [data-theme="dark"] .btn-icon.red:hover    { background: #2D1515; border-color: #7F1D1D; }
+    [data-theme="dark"] .model-warning-dark,
+    [data-theme="dark"] #model-warning { background: #2D2510; border-color: #4D3A15; color: #fbbf24; }
+    [data-theme="dark"] .cutter-marks input:focus,
+    [data-theme="dark"] .url-row input:focus { box-shadow: 0 0 0 3px rgba(255,34,51,0.12); }
   </style>
 </head>
 <body>
@@ -823,10 +1111,11 @@
 <main class="main">
 
   <nav class="tabs-nav">
-    <button class="tab-btn active" onclick="switchTab('downloader')">Pobieranie</button>
-    <button class="tab-btn" onclick="switchTab('streams')">Live Streamy</button>
-    <button class="tab-btn" onclick="switchTab('settings')">Ustawienia</button>
-    <button class="tab-btn" onclick="switchTab('console-tab')">Konsola</button>
+    <button class="tab-btn active" data-tab="downloader" onclick="switchTab('downloader', this)">Pobieranie</button>
+    <button class="tab-btn" data-tab="streams" onclick="switchTab('streams', this)">Live Streamy</button>
+    <button class="tab-btn" data-tab="cutter" onclick="switchTab('cutter', this)">Fast Cutter</button>
+    <button class="tab-btn" data-tab="settings" onclick="switchTab('settings', this)">Ustawienia</button>
+    <button class="tab-btn" data-tab="console-tab" onclick="switchTab('console-tab', this)">Konsola</button>
     <span class="tab-indicator" id="tab-indicator"></span>
   </nav>
 
@@ -928,6 +1217,233 @@
             <span class="t-thumb"></span>
           </span>
         </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fast Cutter — post-processing wideo (wycinanie + branding) -->
+  <div id="cutter" class="tab-content">
+    <div class="card">
+      <div class="section-label">Fast Cutter</div>
+      <div class="cutter-grid">
+        <!-- LEWA: dropzone / player + timeline marks -->
+        <div class="cutter-left">
+          <div id="cutter-dropzone" class="cutter-dropzone">
+            <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 4v16M4 12h16"/>
+            </svg>
+            <div class="dz-title">Przeciągnij plik wideo lub kliknij, aby wybrać</div>
+            <div class="dz-hint">MP4, MKV, WebM · lub kliknij ikonę nożyczek na karcie pobrania</div>
+            <input type="file" id="cutter-file-input" accept="video/*" style="display:none">
+          </div>
+          <div id="cutter-player-wrap" style="display:none">
+            <!-- Natywne kontrolki <video> wyłączone celowo: strumień transkodowany
+                 w locie (WebM pipe) nie ma indeksu klatek, więc natywny seek bar
+                 nie działa. Cały transport obsługuje customowa oś czasu niżej. -->
+            <div class="cutter-video-wrap">
+              <video id="cutter-video" preload="auto" playsinline></video>
+              <div id="cutter-video-loader" class="cutter-video-loader" hidden></div>
+            </div>
+            <input id="cutter-slider" class="cutter-slider" type="range"
+                   min="0" max="100" step="0.1" value="0" aria-label="Oś czasu">
+            <div class="cutter-transport">
+              <button type="button" id="cutter-play-btn" class="cutter-ctrl-btn" onclick="cutterTogglePlay()"
+                      title="Odtwórz / pauza (spacja)" aria-label="Odtwórz / pauza">
+                <svg id="cutter-ico-play" width="15" height="15" viewBox="0 0 15 15" fill="currentColor">
+                  <path d="M4 2.2v10.6c0 .6.65.97 1.17.66l8.3-5.3a.78.78 0 0 0 0-1.32l-8.3-5.3A.78.78 0 0 0 4 2.2z"/>
+                </svg>
+                <svg id="cutter-ico-pause" width="15" height="15" viewBox="0 0 15 15" fill="currentColor" style="display:none">
+                  <rect x="3" y="2" width="3.4" height="11" rx="1"/>
+                  <rect x="8.6" y="2" width="3.4" height="11" rx="1"/>
+                </svg>
+              </button>
+              <button type="button" id="cutter-mute-btn" class="cutter-ctrl-btn" onclick="cutterToggleMute()"
+                      title="Wycisz / włącz dźwięk" aria-label="Wycisz / włącz dźwięk">
+                <svg id="cutter-ico-vol" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M7.5 2.5 4.5 5H2v5h2.5l3 2.5z" fill="currentColor" stroke="none"/>
+                  <path d="M10 5.5a3 3 0 0 1 0 4M11.8 3.8a5.4 5.4 0 0 1 0 7.4"/>
+                </svg>
+                <svg id="cutter-ico-muted" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                  <path d="M7.5 2.5 4.5 5H2v5h2.5l3 2.5z" fill="currentColor" stroke="none"/>
+                  <path d="M10 5.5l4 4M14 5.5l-4 4"/>
+                </svg>
+              </button>
+              <span class="cutter-tc-time">
+                <span id="tc-current">00:00:00</span>
+                <span class="sep">/</span>
+                <span id="tc-total">00:00:00</span>
+              </span>
+              <span id="cutter-file-name" class="cutter-file-name" title=""></span>
+              <button type="button" class="btn-about-link cutter-tc-reset" onclick="cutterReset()">Zmień plik</button>
+            </div>
+            <div class="cutter-marks">
+              <div class="cutter-marks-inputs">
+                <label class="cutter-mark-field">
+                  <span class="cutter-mark-lbl">Start</span>
+                  <input id="mark-start" type="text" placeholder="00:00:00" maxlength="8" aria-label="Czas startu">
+                </label>
+                <label class="cutter-mark-field">
+                  <span class="cutter-mark-lbl">Koniec</span>
+                  <input id="mark-end" type="text" placeholder="00:00:00" maxlength="8" aria-label="Czas końca">
+                </label>
+              </div>
+              <div class="cutter-marks-buttons">
+                <button type="button" class="btn-primary" onclick="cutterSetMark('start')">
+                  <span class="mark-arrow">[[</span> Ustaw jako START
+                </button>
+                <button type="button" class="btn-primary" onclick="cutterSetMark('end')">
+                  Ustaw jako KONIEC <span class="mark-arrow">]]</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- PRAWA: branding -->
+        <div class="cutter-right">
+          <div class="section-label" style="margin-top:0">Branding</div>
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">Logo</div>
+              <div class="setting-desc">Nakładane w rogu materiału.</div>
+            </div>
+            <select id="cutter-logo-src" class="cutter-select">
+              <option value="">Brak</option>
+              <option value="default" selected>Domyślne WP</option>
+              <option value="custom">Wybierz PNG…</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">Pozycja logo</div>
+            </div>
+            <select id="cutter-logo-pos" class="cutter-select">
+              <option value="tr">Prawy górny</option>
+              <option value="tl">Lewy górny</option>
+              <option value="br">Prawy dolny</option>
+              <option value="bl">Lewy dolny</option>
+            </select>
+          </div>
+
+          <!-- Suwaki brandingu — zmiany odświeżają podgląd playera (debounce),
+               wartości wstrzykiwane do filter_complex podglądu i renderu. -->
+          <div class="brand-slider-row">
+            <div class="brand-slider-head">
+              <span class="brand-slider-lbl">Skala logo</span>
+              <span class="brand-slider-val" id="logo-scale-val">16%</span>
+            </div>
+            <input id="logo-scale" class="brand-slider" type="range" min="5" max="40" step="1" value="16"
+                   aria-label="Skala logo w procentach szerokości">
+          </div>
+          <div class="brand-slider-row">
+            <div class="brand-slider-head">
+              <span class="brand-slider-lbl">Pozycja X <span class="brand-slider-hint">margines od krawędzi</span></span>
+              <span class="brand-slider-val" id="logo-x-val">20 px</span>
+            </div>
+            <input id="logo-x" class="brand-slider" type="range" min="0" max="300" step="2" value="20"
+                   aria-label="Margines poziomy logo">
+          </div>
+          <div class="brand-slider-row">
+            <div class="brand-slider-head">
+              <span class="brand-slider-lbl">Pozycja Y <span class="brand-slider-hint">margines od krawędzi</span></span>
+              <span class="brand-slider-val" id="logo-y-val">20 px</span>
+            </div>
+            <input id="logo-y" class="brand-slider" type="range" min="0" max="300" step="2" value="20"
+                   aria-label="Margines pionowy logo">
+          </div>
+
+          <div class="brand-slider-row">
+            <div class="brand-slider-head">
+              <span class="brand-slider-lbl">Głośność audio <span class="brand-slider-hint">mixer materiału</span></span>
+              <span class="brand-slider-val" id="cutter-volume-val">100%</span>
+            </div>
+            <input id="cutter-volume" class="brand-slider" type="range" min="0" max="200" step="5" value="100"
+                   aria-label="Głośność audio materiału (0–200%)">
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">Dodaj animację subskrypcji</div>
+              <div class="setting-desc">Animowany przycisk SUB (z maską alfa) na starcie wycinka i ponownie tuż przed tyłówką.</div>
+            </div>
+            <label class="toggle-sw">
+              <input type="checkbox" id="cutter-sub-check">
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">Źródło (tekst)</div>
+              <div class="setting-desc">Napis pisany efektem maszyny (Gilroy) na początku klipu.</div>
+            </div>
+            <input id="cutter-src-text" class="cutter-input" type="text" placeholder="np. Źródło: Sejm RP" maxlength="80">
+          </div>
+          <div class="brand-slider-row">
+            <div class="brand-slider-head">
+              <span class="brand-slider-lbl">Wielkość czcionki źródła</span>
+              <span class="brand-slider-val" id="src-size-val">28 px</span>
+            </div>
+            <input id="src-size" class="brand-slider" type="range" min="14" max="64" step="1" value="28"
+                   aria-label="Wielkość czcionki napisu źródła">
+          </div>
+          <div class="brand-slider-row">
+            <div class="brand-slider-head">
+              <span class="brand-slider-lbl">Pozycja X źródła <span class="brand-slider-hint">margines poziomy</span></span>
+              <span class="brand-slider-val" id="src-x-val">24 px</span>
+            </div>
+            <input id="src-x" class="brand-slider" type="range" min="0" max="400" step="2" value="24"
+                   aria-label="Margines poziomy napisu źródła">
+          </div>
+          <div class="brand-slider-row">
+            <div class="brand-slider-head">
+              <span class="brand-slider-lbl">Pozycja Y źródła <span class="brand-slider-hint">margines pionowy</span></span>
+              <span class="brand-slider-val" id="src-y-val">24 px</span>
+            </div>
+            <input id="src-y" class="brand-slider" type="range" min="0" max="400" step="2" value="24"
+                   aria-label="Margines pionowy napisu źródła">
+          </div>
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">Pozycja źródła</div>
+            </div>
+            <select id="cutter-src-pos" class="cutter-select">
+              <option value="tl" selected>Lewy górny róg</option>
+              <option value="tr">Prawy górny róg</option>
+              <option value="bl">Lewy dolny róg</option>
+              <option value="br">Prawy dolny róg</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">Outro (tyłówka)</div>
+              <div class="setting-desc">Doklejenie wideo na końcu materiału.</div>
+            </div>
+            <select id="cutter-outro-src" class="cutter-select">
+              <option value="" selected>Brak</option>
+              <option value="default">Standardowa</option>
+              <option value="custom">Wybierz wideo…</option>
+            </select>
+          </div>
+          <div class="brand-slider-row" id="overlap-row">
+            <div class="brand-slider-head">
+              <span class="brand-slider-lbl">Czas nałożenia outro <span class="brand-slider-hint">overlap z maską alfa</span></span>
+              <span class="brand-slider-val" id="outro-overlap-val">0.0 s</span>
+            </div>
+            <input id="outro-overlap" class="brand-slider" type="range" min="0" max="3" step="0.1" value="0"
+                   aria-label="Ile sekund przed końcem nałożyć outro">
+          </div>
+
+          <button id="cutter-render-btn" class="btn-primary" onclick="cutterRender()" style="width:100%;justify-content:center;margin-top:8px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+              <line x1="20" y1="4" x2="8.12" y2="15.88"/>
+              <line x1="14.47" y1="14.48" x2="20" y2="20"/>
+              <line x1="8.12" y1="8.12" x2="12" y2="12"/>
+            </svg>
+            WYTNIJ MATERIAŁ
+          </button>
+          <div id="cutter-mode-hint" class="cutter-mode-hint">Bez brandingu — tryb Supersoniczny (`-c copy`, ~2 s)</div>
+        </div>
       </div>
     </div>
   </div>
@@ -1236,11 +1752,18 @@
   }
   window.addEventListener('resize', positionTabIndicator);
 
-  function switchTab(id) {
+  function switchTab(id, btn) {
     const target = document.getElementById(id);
-    if (target.classList.contains('active')) return;
+    if (!target || target.classList.contains('active')) return;
+    // Emit event gdy user opuszcza Fast Cutter — Cutter zabija live ffmpeg
+    // (VP8 encode = 30% CPU, nie zostawiamy w tle po zmianie zakładki).
+    const prev = document.querySelector('.tab-content.active');
+    if (prev && prev.id === 'cutter' && id !== 'cutter') {
+      window.dispatchEvent(new CustomEvent('cutter:tab-left'));
+    }
+    const activeBtn = btn || document.querySelector(`.tabs-nav .tab-btn[data-tab="${id}"]`);
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    event.currentTarget.classList.add('active');
+    if (activeBtn) activeBtn.classList.add('active');
     positionTabIndicator();
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     target.classList.add('active');
@@ -1375,6 +1898,10 @@
         const prevTranscription = prev ? prev.transcription : null;
         if (tasks[data.task_id]) {
           Object.assign(tasks[data.task_id], data);
+        } else {
+          // Nowe zadanie utworzone po stronie serwera (np. render Fast Cuttera
+          // rejestrowany przez /api/cutter/render) — dodaj kartę od razu.
+          tasks[data.task_id] = { ...data };
         }
         if (data.status && data.status !== 'downloading') {
           pendingStop.delete(data.task_id);
@@ -1591,17 +2118,257 @@
     }
   }
 
+  /** Przycisk transkrypcji Whisper — wspólny dla kart pobierań i kart
+      renderu Fast Cuttera (te same stany: start / w toku / błąd / gotowe).
+      Klik obsługuje delegowany handler data-act="transcribe", który
+      wysyła task_id — backend bierze bezwzględną ścieżkę z task.output_path. */
+  function _transcribeBtnHtml(t, rid) {
+    if (t.status !== 'done' || !t.output_path) return '';
+    if (!t.transcription) {
+      return `<button type="button" class="btn-icon purple" data-act="transcribe" data-id="${rid}" title="Utwórz transkrypcję (Whisper)">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4.5" y="1" width="5" height="7" rx="2.5"/>
+          <path d="M2 7.5a5 5 0 0 0 10 0"/><line x1="7" y1="12.5" x2="7" y2="10.5"/>
+          <line x1="5" y1="13" x2="9" y2="13"/>
+        </svg>
+      </button>`;
+    }
+    if (t.transcription === 'in_progress') {
+      return `<button type="button" class="btn-icon purple" disabled title="Transkrypcja w toku…">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M7 1.5a5.5 5.5 0 0 1 0 11" stroke-dasharray="3 2"/>
+        </svg>
+      </button>`;
+    }
+    if (t.transcription === 'error') {
+      return `<button type="button" class="btn-icon red" data-act="transcribe" data-id="${rid}" title="Transkrypcja nieudana — spróbuj ponownie">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="7" cy="7" r="5.5"/><line x1="7" y1="4" x2="7" y2="7.5"/><circle cx="7" cy="9.5" r="0.5" fill="currentColor"/>
+        </svg>
+      </button>`;
+    }
+    return `<button type="button" class="btn-icon green" title="Transkrypcja gotowa: ${escHtml(t.transcription)}">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="2,7 5.5,10.5 12,3.5"/>
+      </svg>
+    </button>`;
+  }
+
   // ── Renderowanie listy zadań ───────────────────────────
+  // Ikony nożyczek — 18 px do miniatury karty renderu, 14 px do przycisku
+  // (spójne z ikonami akcji na karcie pobierania).
+  const _SCISSORS_18 =
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>' +
+      '<line x1="20" y1="4" x2="8.12" y2="15.88"/>' +
+      '<line x1="14.47" y1="14.48" x2="20" y2="20"/>' +
+      '<line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>';
+  const _SCISSORS_14 =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>' +
+      '<line x1="20" y1="4" x2="8.12" y2="15.88"/>' +
+      '<line x1="14.47" y1="14.48" x2="20" y2="20"/>' +
+      '<line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>';
+  // Ikona folderu — identyczna na karcie pobrania i renderu (jedna prawda).
+  const _FOLDER_ICON =
+    '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M1 5C1 4.2 1.7 3.5 2.5 3.5H5.2L6.2 5H11.5C12.3 5 13 5.7 13 6.5V10C13 10.8 12.3 11.5 11.5 11.5H2.5C1.7 11.5 1 10.8 1 10V5Z"/></svg>';
+
+  const _STATUS_LABEL = {
+    queue: 'Kolejka', downloading: 'Pobieranie', merging: 'Scalanie',
+    done: 'Gotowe', error: 'Błąd', cancelled: 'Anulowano',
+  };
+
+  /** Klucz STRUKTURY karty — obejmuje wszystko, co decyduje o układzie DOM
+      (status, obecność/rodzaj przycisków, miniatura, tytuł…), ale CELOWO
+      pomija wartości zmieniające się co tick pobierania (progress, speed_str,
+      live_status). Gdy klucz jest niezmieniony, karta NIE jest przebudowywana
+      — patchujemy tylko dynamiczne wartości. To eliminuje miganie ikon i
+      resetowanie animacji beama/hovера przy każdej mikro-aktualizacji %. */
+  function _taskStructKey(t) {
+    return [
+      t.job_type || 'download', t.status, t.transcription || '',
+      t.output_path ? '1' : '0', t.live_record ? '1' : '0',
+      t.title || t.url || '', t.format_id || '',
+      t.thumbnail_url || '', t.error_msg || '',
+      pendingStop.has(t.task_id) ? '1' : '0',
+    ].join('');
+  }
+
+  /** Animuje pasek postępu z obecnej szerokości do data-prog (bez remountu). */
+  function _applyProgress(el) {
+    const bar = el.querySelector('.progress-bar');
+    if (!bar) return;
+    const to  = parseFloat(bar.dataset.prog) || 0;
+    const cur = parseFloat(bar.style.width) || 0;
+    if (Math.abs(to - cur) > 0.2 && window.anime?.animate) {
+      anime.animate(bar, { width: to + '%', duration: 450, ease: 'outQuart' });
+    } else {
+      bar.style.width = to + '%';
+    }
+  }
+
+  /** Patch WYŁĄCZNIE wartości dynamicznych na istniejącej karcie — pasek,
+      tekst prędkości, licznik live, procent renderu. Nie dotyka ikon,
+      miniatury ani struktury (textContent auto-escapuje, brak innerHTML). */
+  function _patchTaskDynamic(el, t) {
+    const bar = el.querySelector('.progress-bar');
+    if (bar) {
+      bar.dataset.prog = (t.job_type === 'render')
+        ? Math.round(t.progress || 0) : (t.progress || 0);
+      _applyProgress(el);
+    }
+    const spd = el.querySelector('.dl-speed');
+    if (spd) spd.textContent = (t.status === 'downloading' && t.speed_str) ? t.speed_str : '';
+    const lt = el.querySelector('.live-timer .timer-value');
+    if (lt) lt.textContent = t.live_status || 'Nagrywanie…';
+    const rd = el.querySelector('.render-dyn');
+    if (rd) {
+      const rSpeed = (t.status === 'rendering' && t.speed_str) ? ' · ' + t.speed_str : '';
+      rd.textContent = t.status === 'rendering'
+        ? ' · ' + Math.round(t.progress || 0) + '%' + rSpeed
+        : (t.status === 'error' && t.error_msg ? ' · ' + t.error_msg : '');
+    }
+  }
+
+  /** Buduje pełny HTML karty (wywoływany TYLKO przy pierwszym pokazaniu
+      zadania lub zmianie struktury — nie na każdy tick %). */
+  function _buildTaskCard(t) {
+    const rid = escHtml(t.task_id);
+
+    // ── Fast Cutter render — karta ujednolicona z kartą pobrania ──────
+    // Układ ikon: [Folder] [Nożyczki] [Whisper] [Usuń] — bez duplikacji,
+    // bez surowego tekstu "Pokaż w folderze" (zastąpiony ikoną folderu).
+    if (t.job_type === 'render') {
+      const rStatusLabel = ({
+        rendering: 'Renderowanie…', done: 'Gotowe', error: 'Błąd',
+      })[t.status] || t.status;
+      const rReveal = (t.status === 'done' && t.output_path)
+        ? `<button type="button" class="btn-icon green" data-act="reveal" data-id="${rid}" title="Pokaż w folderze">${_FOLDER_ICON}</button>`
+        : '';
+      const rCutterBtn = (t.status === 'done' && t.output_path)
+        ? `<button type="button" class="btn-icon purple" data-act="cutter" data-id="${rid}" title="Otwórz w Cutterze">${_SCISSORS_14}</button>`
+        : '';
+      const rTranscribe = _transcribeBtnHtml(t, rid);
+      const rRemove = (t.status === 'done' || t.status === 'error')
+        ? `<button type="button" data-act="rm" data-id="${rid}">Usuń</button>`
+        : '';
+      const rProgress = (t.status === 'rendering')
+        ? `<div class="progress-wrap"><div class="progress-bar rendering" data-prog="${Math.round(t.progress || 0)}" style="width:${Math.round(t.progress || 0)}%"></div></div>`
+        : '';
+      const rStatusColor = t.status === 'done' ? '#22c55e' : (t.status === 'error' ? 'var(--red)' : 'var(--text-2)');
+      const rSpeed = (t.status === 'rendering' && t.speed_str) ? ' · ' + escHtml(t.speed_str) : '';
+      const rDyn = t.status === 'rendering'
+        ? ' · ' + Math.round(t.progress || 0) + '%' + rSpeed
+        : (t.status === 'error' && t.error_msg ? ' · ' + escHtml(t.error_msg) : '');
+      const rTitle = escHtml(t.title || (t.output_path ? t.output_path.split(/[\\/]/).pop() : '(render)'));
+      const rActions = (rReveal || rCutterBtn || rTranscribe || rRemove)
+        ? `<div class="task-actions">${rReveal}${rCutterBtn}${rTranscribe}${rRemove}</div>`
+        : '';
+      return `
+        <div class="task task-render ${t.status}" data-id="${rid}">
+          <div class="task-thumb task-thumb-render">${_SCISSORS_18}</div>
+          <div class="task-info">
+            <div class="task-title">${rTitle}</div>
+            <div class="task-meta" style="color:${rStatusColor}"><span class="render-static">${rStatusLabel}</span><span class="render-dyn">${rDyn}</span></div>
+            ${rProgress}
+          </div>
+          ${rActions}
+        </div>`;
+    }
+
+    // Miniatura: obraz jeśli URL dostępny (tylko https://), inaczej placeholder.
+    const thumbHtml = (t.thumbnail_url && t.thumbnail_url.startsWith('https://'))
+      ? `<img src="${escHtml(t.thumbnail_url)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+      : `<svg viewBox="0 0 18 14"><rect x="1" y="1" width="16" height="12" rx="2"/><polygon points="7,4 13,7 7,10" fill="#bbb" stroke="none"/></svg>`;
+
+    const rm = (t.status !== 'downloading' && t.status !== 'merging')
+      ? `<button type="button" data-act="rm" data-id="${rid}">Usuń</button>`
+      : '';
+    const stopBtn = (t.status === 'downloading' && t.live_record)
+      ? pendingStop.has(t.task_id)
+        ? `<button type="button" class="warning" disabled>Zatrzymywanie…</button>`
+        : `<button type="button" class="warning" data-act="stop" data-id="${rid}">Zatrzymaj i zapisz</button>`
+      : '';
+    const cx = (t.status === 'downloading' && !t.live_record)
+      ? `<button type="button" class="danger" data-act="cx" data-id="${rid}">Anuluj</button>`
+      : '';
+    const revealBtn = (t.status === 'done' && t.output_path)
+      ? `<button type="button" class="btn-icon green" data-act="reveal" data-id="${rid}" title="Pokaż w folderze">${_FOLDER_ICON}</button>`
+      : '';
+    const cutterBtn = (t.status === 'done' && t.output_path)
+      ? `<button type="button" class="btn-icon purple" data-act="cutter" data-id="${rid}" title="Otwórz w Cutterze">${_SCISSORS_14}</button>`
+      : '';
+    const transcribeBtn = _transcribeBtnHtml(t, rid);
+    // Duplikacja tylko dla zwykłych pobierań (karty renderu jej nie mają).
+    const cloneBtn = (t.status === 'downloading' || t.status === 'done' || t.status === 'error' || t.status === 'cancelled')
+      ? `<button type="button" class="btn-icon blue" data-act="clone" data-id="${rid}" title="Duplikuj pobieranie">
+           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+             <rect x="4.5" y="4.5" width="8" height="8" rx="1.5"/>
+             <path d="M9.5 4.5V2.5A1.5 1.5 0 0 0 8 1H2.5A1.5 1.5 0 0 0 1 2.5V8A1.5 1.5 0 0 0 2.5 9.5H4.5"/>
+           </svg>
+         </button>`
+      : '';
+    const actions = (rm || stopBtn || cx || revealBtn || cutterBtn || cloneBtn || transcribeBtn)
+      ? `<div class="task-actions">${revealBtn}${cutterBtn}${transcribeBtn}${cloneBtn}${rm}${stopBtn}${cx}</div>` : '';
+
+    let progressHtml = '';
+    if (t.live_record && t.status === 'downloading') {
+      const statusText = escHtml(t.live_status || 'Nagrywanie…');
+      progressHtml = `<div class="live-timer"><span class="timer-dot"></span><span class="timer-value">${statusText}</span></div>`;
+    } else if (t.status === 'merging') {
+      progressHtml = `<div class="merge-bar"><div class="merge-track"><div class="merge-track-inner"></div></div><div class="merge-label">Scalanie pliku…</div></div>`;
+    } else if (t.status !== 'queue') {
+      const speedTxt = (t.status === 'downloading' && t.speed_str) ? escHtml(t.speed_str) : '';
+      progressHtml = `<div class="progress-wrap"><div class="progress-bar ${t.status}" data-prog="${t.progress || 0}"></div></div><div class="dl-speed">${speedTxt}</div>`;
+    }
+
+    // Beam: `--anim-elapsed` ustawiane raz przy budowie karty. Ponieważ karta
+    // nie jest już przebudowywana na każdy tick, animacja `.downloading::before`
+    // biegnie płynnie bez restartów — ta zmienna to teraz tylko poprawna faza
+    // startowa (gdyby karta jednak wróciła po zmianie struktury).
+    let animStyle = '';
+    if (t.status === 'downloading') {
+      if (!downloadStartTimes.has(t.task_id)) {
+        downloadStartTimes.set(t.task_id, performance.now());
+      }
+      const elapsed = Math.floor(performance.now() - downloadStartTimes.get(t.task_id));
+      animStyle = ` style="--anim-elapsed: ${elapsed}"`;
+    } else {
+      downloadStartTimes.delete(t.task_id);
+    }
+
+    const isLiveRec = t.live_record && t.status === 'downloading';
+    const liveRecPill = isLiveRec
+      ? `<span class="live-rec-pill"><span class="lrp-dot"></span>LIVE REC</span>`
+      : '';
+    const statusBadge = isLiveRec
+      ? ''
+      : `<span class="badge ${t.status}">${_STATUS_LABEL[t.status] || t.status}</span>`;
+
+    return `
+    <div class="task ${t.status}"${animStyle} draggable="true" data-id="${rid}" ondragstart="handleDragStart(event)" ondragend="handleDragEnd(event)">
+      <div class="drag-handle">⋮⋮</div>
+      <div class="task-thumb">${thumbHtml}</div>
+      <div class="task-info">
+        <div class="task-title">${escHtml(t.title || t.url)}</div>
+        <div class="task-meta">${escHtml(t.format_id || '')}${t.output_path ? ' · ' + escHtml(t.output_path) : ''}${t.live_record ? ' · Live Stream' : ''}</div>
+        ${progressHtml}
+      </div>
+      ${actions}
+      ${liveRecPill}
+      ${statusBadge}
+    </div>`;
+  }
+
+  // ── Renderowanie listy z reconciliation (keyed diff) ────────────────
+  // Zamiast `list.innerHTML = …` na każdy event (co remountowało wszystkie
+  // ikony/miniatury i powodowało miganie), utrzymujemy istniejące węzły
+  // DOM. Karta o niezmienionej strukturze dostaje tylko patch dynamicznych
+  // wartości; przebudowa następuje wyłącznie przy zmianie struktury.
   function renderTasks() {
     const list = document.getElementById('task-list');
     const taskArr = Object.values(tasks);
-
-    // Save current progress bar positions so we don't reset animation to 0
-    const prevProg = {};
-    list.querySelectorAll('.task[data-id]').forEach(el => {
-      const bar = el.querySelector('.progress-bar');
-      if (bar) prevProg[el.dataset.id] = parseFloat(bar.style.width) || 0;
-    });
 
     if (taskArr.length === 0) {
       list.innerHTML = `<div class="empty">
@@ -1612,161 +2379,56 @@
       </div>`;
       return;
     }
+    const emptyEl = list.querySelector('.empty');
+    if (emptyEl) emptyEl.remove();
 
-    const statusLabel = {
-      queue: 'Kolejka',
-      downloading: 'Pobieranie',
-      merging: 'Scalanie',
-      done: 'Gotowe',
-      error: 'Błąd',
-      cancelled: 'Anulowano',
-    };
+    const existing = new Map();
+    list.querySelectorAll('.task[data-id]').forEach(el => existing.set(el.dataset.id, el));
 
-    list.innerHTML = taskArr.map(t => {
-      const rid = escHtml(t.task_id);
+    const freshEls = [];
+    let prevNode = null;
 
-      // Miniatura: pokazuj obraz jeśli URL jest dostępny (tylko https://)
-      const thumbHtml = (t.thumbnail_url && t.thumbnail_url.startsWith('https://'))
-        ? `<img src="${escHtml(t.thumbnail_url)}" alt="" loading="lazy" onerror="this.style.display='none'">`
-        : `<svg viewBox="0 0 18 14"><rect x="1" y="1" width="16" height="12" rx="2"/><polygon points="7,4 13,7 7,10" fill="#bbb" stroke="none"/></svg>`;
+    taskArr.forEach(t => {
+      const id = String(t.task_id);
+      const key = _taskStructKey(t);
+      let el = existing.get(id);
+      existing.delete(id);
 
-      // Przyciski akcji
-      const rm = (t.status !== 'downloading' && t.status !== 'merging')
-        ? `<button type="button" data-act="rm" data-id="${rid}">Usuń</button>`
-        : '';
-      // Live stream w trakcie → "Zatrzymaj i zapisz" (SIGINT) + "Anuluj" (SIGKILL)
-      const stopBtn = (t.status === 'downloading' && t.live_record)
-        ? pendingStop.has(t.task_id)
-          ? `<button type="button" class="warning" disabled>Zatrzymywanie…</button>`
-          : `<button type="button" class="warning" data-act="stop" data-id="${rid}">Zatrzymaj i zapisz</button>`
-        : '';
-      const cx = (t.status === 'downloading' && !t.live_record)
-        ? `<button type="button" class="danger" data-act="cx" data-id="${rid}">Anuluj</button>`
-        : '';
-      // Ikona "Pokaż w folderze" — tylko gdy pobieranie zakończone i ścieżka istnieje
-      const revealBtn = (t.status === 'done' && t.output_path)
-        ? `<button type="button" class="btn-icon green" data-act="reveal" data-id="${rid}" title="Pokaż w folderze">
-             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-               <path d="M1 5C1 4.2 1.7 3.5 2.5 3.5H5.2L6.2 5H11.5C12.3 5 13 5.7 13 6.5V10C13 10.8 12.3 11.5 11.5 11.5H2.5C1.7 11.5 1 10.8 1 10V5Z"/>
-             </svg>
-           </button>`
-        : '';
-      // Ikona "Transkrybuj" — tylko dla zakończonych zadań z plikiem
-      let transcribeBtn = '';
-      if (t.status === 'done' && t.output_path) {
-        if (!t.transcription) {
-          transcribeBtn = `<button type="button" class="btn-icon purple" data-act="transcribe" data-id="${rid}" title="Utwórz transkrypcję (Whisper)">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="4.5" y="1" width="5" height="7" rx="2.5"/>
-              <path d="M2 7.5a5 5 0 0 0 10 0"/><line x1="7" y1="12.5" x2="7" y2="10.5"/>
-              <line x1="5" y1="13" x2="9" y2="13"/>
-            </svg>
-          </button>`;
-        } else if (t.transcription === 'in_progress') {
-          transcribeBtn = `<button type="button" class="btn-icon purple" disabled title="Transkrypcja w toku…">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-              <path d="M7 1.5a5.5 5.5 0 0 1 0 11" stroke-dasharray="3 2"/>
-            </svg>
-          </button>`;
-        } else if (t.transcription === 'error') {
-          transcribeBtn = `<button type="button" class="btn-icon red" data-act="transcribe" data-id="${rid}" title="Transkrypcja nieudana — spróbuj ponownie">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-              <circle cx="7" cy="7" r="5.5"/><line x1="7" y1="4" x2="7" y2="7.5"/><circle cx="7" cy="9.5" r="0.5" fill="currentColor"/>
-            </svg>
-          </button>`;
-        } else {
-          transcribeBtn = `<button type="button" class="btn-icon green" title="Transkrypcja gotowa: ${escHtml(t.transcription)}">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="2,7 5.5,10.5 12,3.5"/>
-            </svg>
-          </button>`;
-        }
-      }
-      // "Duplikuj" — dla zwykłych pobierań i live przy statusie downloading/done/error/cancelled
-      const cloneBtn = (t.status === 'downloading' || t.status === 'done' || t.status === 'error' || t.status === 'cancelled')
-        ? `<button type="button" class="btn-icon blue" data-act="clone" data-id="${rid}" title="Duplikuj pobieranie">
-             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-               <rect x="4.5" y="4.5" width="8" height="8" rx="1.5"/>
-               <path d="M9.5 4.5V2.5A1.5 1.5 0 0 0 8 1H2.5A1.5 1.5 0 0 0 1 2.5V8A1.5 1.5 0 0 0 2.5 9.5H4.5"/>
-             </svg>
-           </button>`
-        : '';
-      const actions = (rm || stopBtn || cx || revealBtn || cloneBtn || transcribeBtn)
-        ? `<div class="task-actions">${revealBtn}${transcribeBtn}${cloneBtn}${rm}${stopBtn}${cx}</div>` : '';
-
-      // Progress area
-      let progressHtml = '';
-      if (t.live_record && t.status === 'downloading') {
-        const statusText = escHtml(t.live_status || 'Nagrywanie…');
-        progressHtml = `<div class="live-timer"><span class="timer-dot"></span><span class="timer-value">${statusText}</span></div>`;
-      } else if (t.status === 'merging') {
-        progressHtml = `<div class="merge-bar"><div class="merge-track"><div class="merge-track-inner"></div></div><div class="merge-label">Scalanie pliku…</div></div>`;
-      } else if (t.status !== 'queue') {
-        const speedTxt = (t.status === 'downloading' && t.speed_str) ? escHtml(t.speed_str) : '';
-        progressHtml = `<div class="progress-wrap"><div class="progress-bar ${t.status}" data-prog="${t.progress || 0}"></div></div><div class="dl-speed">${speedTxt}</div>`;
-      }
-
-      // Beam continuity: trzymamy `performance.now()` momentu startu pobierania,
-      // żeby po rebuild DOM (renderTasks woła `list.innerHTML = …` przy każdym
-      // task_update z WS) nowa animacja `.task.downloading::before` startowała
-      // od fazy odpowiadającej rzeczywistemu elapsed time. CSS używa
-      // `animation-delay: calc(-1ms * var(--anim-elapsed))`.
-      let animStyle = '';
-      if (t.status === 'downloading') {
-        if (!downloadStartTimes.has(t.task_id)) {
-          downloadStartTimes.set(t.task_id, performance.now());
-        }
-        const elapsed = Math.floor(performance.now() - downloadStartTimes.get(t.task_id));
-        animStyle = ` style="--anim-elapsed: ${elapsed}"`;
+      if (el && el.dataset.struct === key) {
+        // Struktura bez zmian → tylko dynamiczne wartości (zero remountu).
+        _patchTaskDynamic(el, t);
       } else {
-        downloadStartTimes.delete(t.task_id);
+        // Nowa karta albo zmiana struktury → zbuduj świeży węzeł.
+        const oldW = el ? (parseFloat(el.querySelector('.progress-bar')?.style.width) || 0) : null;
+        const tmp = document.createElement('template');
+        tmp.innerHTML = _buildTaskCard(t).trim();
+        const newEl = tmp.content.firstElementChild;
+        newEl.dataset.struct = key;
+        if (el) el.replaceWith(newEl);
+        el = newEl;
+        // Płynne dojście paska: zacznij od poprzedniej szerokości (jeśli
+        // to przebudowa istniejącej karty), potem animuj do docelowej.
+        if (oldW !== null) {
+          const bar = el.querySelector('.progress-bar');
+          if (bar) bar.style.width = oldW + '%';
+        }
+        _applyProgress(el);
+        if (!seenTaskIds.has(id)) freshEls.push(el);
       }
 
-      // LIVE REC pigułka — dla live tasks w trakcie pobierania. Zastępuje
-      // standardowy status badge `Pobieranie` (jeden pill wystarczy, dwa
-      // czerwone obok siebie wyglądały redundantnie).
-      const isLiveRec = t.live_record && t.status === 'downloading';
-      const liveRecPill = isLiveRec
-        ? `<span class="live-rec-pill"><span class="lrp-dot"></span>LIVE REC</span>`
-        : '';
-      const statusBadge = isLiveRec
-        ? ''
-        : `<span class="badge ${t.status}">${statusLabel[t.status] || t.status}</span>`;
-
-      return `
-      <div class="task ${t.status}"${animStyle} draggable="true" data-id="${rid}" ondragstart="handleDragStart(event)" ondragend="handleDragEnd(event)">
-        <div class="drag-handle">⋮⋮</div>
-        <div class="task-thumb">${thumbHtml}</div>
-        <div class="task-info">
-          <div class="task-title">${escHtml(t.title || t.url)}</div>
-          <div class="task-meta">${escHtml(t.format_id || '')}${t.output_path ? ' · ' + escHtml(t.output_path) : ''}${t.live_record ? ' · Live Stream' : ''}</div>
-          ${progressHtml}
-        </div>
-        ${actions}
-        ${liveRecPill}
-        ${statusBadge}
-      </div>`;
-    }).join('');
-
-    // Animate progress bars from previous position → new value using anime.js
-    list.querySelectorAll('.task[data-id]').forEach(el => {
-      const id = el.dataset.id;
-      const bar = el.querySelector('.progress-bar');
-      if (!bar) return;
-      const from = prevProg[id] !== undefined ? prevProg[id] : 0;
-      const to = parseFloat(bar.dataset.prog) || 0;
-      bar.style.width = from + '%';
-      if (Math.abs(to - from) > 0.2 && window.anime?.animate) {
-        anime.animate(bar, { width: to + '%', duration: 450, ease: 'outQuart' });
-      } else {
-        bar.style.width = to + '%';
+      // Kolejność DOM zgodna z taskArr (bez zbędnych przesunięć).
+      if (prevNode) {
+        if (prevNode.nextElementSibling !== el) prevNode.after(el);
+      } else if (list.firstElementChild !== el) {
+        list.prepend(el);
       }
+      prevNode = el;
     });
 
-    // Stagger fade-in dla świeżych kart — task pojawiająca się pierwszy raz
-    // dostaje translateY+scale spring zamiast nagłego flash-in (sekcja 5 spec).
-    const freshEls = [...list.querySelectorAll('.task[data-id]')]
-      .filter(el => !seenTaskIds.has(el.dataset.id));
+    // Usuń karty zadań, których już nie ma w stanie.
+    existing.forEach(el => el.remove());
+
+    // Fade-in tylko dla naprawdę nowych kart (nie dla przebudów statusu).
     freshEls.forEach(el => seenTaskIds.add(el.dataset.id));
     if (freshEls.length && window.anime?.animate) {
       anime.animate(freshEls, {
@@ -1774,7 +2436,7 @@
         duration: 420, delay: anime.stagger(70), ease: 'outQuart'
       });
     }
-    // Click handling is via a single delegated listener on #task-list (see initTaskListDelegation).
+    // Klik obsługuje jeden delegowany listener na #task-list (initTaskListDelegation).
   }
 
   // Delegated click handler — attached ONCE so buttons keep responding during frequent DOM rebuilds.
@@ -1834,6 +2496,17 @@
             const e = await r.json().catch(() => ({}));
             showToast(e.error || 'Nie można otworzyć folderu', true);
           }
+        } else if (act === 'cutter') {
+          // Otwórz plik z listy w zakładce Fast Cutter.
+          const t = tasks[id];
+          if (!t || !t.output_path) { showToast('Brak ścieżki pliku', true); return; }
+          // Przełącz zakładkę
+          const cutterTabBtn = document.querySelector('.tabs-nav .tab-btn[data-tab="cutter"]');
+          if (cutterTabBtn) cutterTabBtn.click();
+          // Załaduj plik (moduł cutter słucha custom eventu)
+          window.dispatchEvent(new CustomEvent('cutter:load-file', {
+            detail: { path: t.output_path, title: t.title || '' }
+          }));
         } else if (act === 'clone') {
           const t = tasks[id];
           if (!t || !window.wpBridge) { showToast('Mostek Qt niedostępny', true); return; }
@@ -2570,6 +3243,15 @@
       triggerReveal();
     });
     obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+    // Dev-fallback: w czystej przeglądarce (bez mostka Qt) body.ready nigdy
+    // nie przyjdzie — po 4 s dodajemy klasę sami; MutationObserver wyżej
+    // złapie zmianę i odpali reveal.
+    setTimeout(() => {
+      if (!document.body.classList.contains('ready') && typeof qt === 'undefined') {
+        document.body.classList.add('ready');
+      }
+    }, 4000);
   })();
 
   // Akordeony + indicator zakładek — uruchamiamy gdy DOM gotowy.
@@ -2581,6 +3263,572 @@
   } else {
     initAccordions();
     positionTabIndicator();
+  }
+
+  // ── Fast Cutter ─────────────────────────────────────────────────────
+  // Preview = live-transcode MP4/MKV → WebM/VP8+Opus przez pipe ffmpeg
+  // (/api/cutter/live-stream). Powód: Chromium w PyQt6-WebEngine 6.8 nie ma
+  // H.264 (LGPL Qt). VP8/Opus w WebM są w każdym Chromium build.
+  // Seek: slider steruje `player.src` z parametrem &start=X — backend zabija
+  // poprzedni ffmpeg i spawnuje nowy z -ss X. Duration z /api/cutter/info
+  // (bo <video>.duration przy WebM pipe = Infinity).
+
+  const cutterState = {
+    filePath: '', duration: 0, sessionId: '', streamStart: 0,
+    customLogoPath: '', customOutroPath: '',
+    dragging: false,   // user trzyma suwak — timeupdate nie nadpisuje pozycji
+    // Suwaki brandingu (wartości UI: % / px / px / s) + mixer + sub + źródło
+    logoScale: 16, logoX: 20, logoY: 20, outroOverlap: 0,
+    audioVolume: 100, subOverlay: false,
+    srcSize: 28, srcPos: 'tl', srcX: 24, srcY: 24,
+  };
+  let _cutterSeekTimer = null;   // debounce seeków (arrow keys / szybkie zmiany)
+  let _cutterBrandTimer = null;  // debounce restartu podglądu po suwakach brandingu
+
+  /** Parametry brandingu doklejane do URL strumienia podglądu: logo
+      (gdy wybrane), mixer audio (gdy ≠100%) i nakładka suba (gdy włączona).
+      Bez aktywnych opcji zwraca '' — backend streamuje bez filter_complex. */
+  function _cutterBrandQS() {
+    let qs = '';
+    const logoSrc = document.getElementById('cutter-logo-src').value;
+    if (logoSrc) {
+      // Suwaki aktywne dla obu wariantów: default = skala całej grafiki
+      // 1920x1080 (100% → fullframe 0:0) + odsunięcie od krawędzi,
+      // custom = ułamek szerokości + marginesy od wybranego rogu.
+      qs += '&logo_src=' + encodeURIComponent(logoSrc)
+        + '&logo_pos=' + encodeURIComponent(document.getElementById('cutter-logo-pos').value)
+        + '&logo_scale=' + (cutterState.logoScale / 100).toFixed(3)
+        + '&logo_x=' + cutterState.logoX
+        + '&logo_y=' + cutterState.logoY;
+      if (logoSrc === 'custom' && cutterState.customLogoPath) {
+        qs += '&logo_custom=' + encodeURIComponent(cutterState.customLogoPath);
+      }
+    }
+    if (Math.abs(cutterState.audioVolume - 100) >= 1) {
+      qs += '&vol=' + (cutterState.audioVolume / 100).toFixed(3);
+    }
+    if (cutterState.subOverlay) qs += '&sub=1';
+    const srcTxt = (document.getElementById('cutter-src-text')?.value || '').trim();
+    if (srcTxt) {
+      qs += '&src=' + encodeURIComponent(srcTxt)
+        + '&src_size=' + Math.round(cutterState.srcSize)
+        + '&src_pos=' + encodeURIComponent(cutterState.srcPos)
+        + '&source_x=' + Math.round(cutterState.srcX)
+        + '&source_y=' + Math.round(cutterState.srcY);
+    }
+    return qs;
+  }
+
+  /** Restart strumienia podglądu z nowymi parametrami brandingu, wznawiając
+      od bieżącej pozycji. Debounce 350 ms — ciągnięcie suwaka nie może
+      spamować backendu restartami ffmpeg. */
+  function _cutterRefreshPreview() {
+    if (!cutterState.filePath) return;
+    clearTimeout(_cutterBrandTimer);
+    _cutterBrandTimer = setTimeout(() => {
+      const v = document.getElementById('cutter-video');
+      const pos = Math.max(0, Math.min(
+        (cutterState.streamStart || 0) + (v.currentTime || 0),
+        Math.max(0, cutterState.duration - 0.5)));
+      _cutterUpdateSrc(pos);
+    }, 350);
+  }
+
+  function _cutterFmtTC(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+    const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+    const s = String(sec % 60).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  }
+  function _cutterParseTC(str) {
+    const m = /^(\d{1,2}):(\d{1,2}):(\d{1,2})$/.exec((str || '').trim());
+    if (!m) return null;
+    return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+  }
+
+  /** Wypełnienie ścieżki slidera do aktualnej pozycji (CSS var --fill). */
+  function _cutterPaintSlider(sl) {
+    const max = parseFloat(sl.max) || 1;
+    const pct = Math.min(100, Math.max(0, (parseFloat(sl.value) || 0) / max * 100));
+    sl.style.setProperty('--fill', pct + '%');
+  }
+
+  function _cutterSyncPlayIcon() {
+    const v = document.getElementById('cutter-video');
+    const playing = v && !v.paused && !v.ended;
+    document.getElementById('cutter-ico-play').style.display  = playing ? 'none' : '';
+    document.getElementById('cutter-ico-pause').style.display = playing ? '' : 'none';
+  }
+  function _cutterSyncMuteIcon() {
+    const v = document.getElementById('cutter-video');
+    document.getElementById('cutter-ico-vol').style.display   = (v && v.muted) ? 'none' : '';
+    document.getElementById('cutter-ico-muted').style.display = (v && v.muted) ? '' : 'none';
+  }
+
+  /** play() z fallbackiem: gdy autoplay z dźwiękiem zablokowany (dev browser),
+      wycisz i spróbuj jeszcze raz — w bundlu Qt flaga autoplay-policy i tak
+      pozwala na start bez gestu. */
+  function _cutterTryPlay(v) {
+    v.play().catch(() => {
+      v.muted = true;
+      _cutterSyncMuteIcon();
+      v.play().catch(() => {});
+    });
+  }
+
+  function cutterTogglePlay() {
+    if (!cutterState.filePath) return;
+    const v = document.getElementById('cutter-video');
+    if (v.paused || v.ended) _cutterTryPlay(v);
+    else v.pause();
+    // Zdarzenia play/pause przyjdą asynchronicznie — synchronizujemy ikonę
+    // od razu, żeby przycisk reagował bez opóźnienia.
+    setTimeout(_cutterSyncPlayIcon, 0);
+  }
+  function cutterToggleMute() {
+    const v = document.getElementById('cutter-video');
+    v.muted = !v.muted;
+    _cutterSyncMuteIcon();
+  }
+
+  function _cutterUpdateSrc(startSec) {
+    cutterState.streamStart = startSec;
+    const v = document.getElementById('cutter-video');
+    const loader = document.getElementById('cutter-video-loader');
+    if (loader) loader.hidden = false;
+    const url = '/api/cutter/live-stream'
+      + '?path=' + encodeURIComponent(cutterState.filePath)
+      + '&start=' + startSec.toFixed(3)
+      + '&session=' + encodeURIComponent(cutterState.sessionId)
+      + _cutterBrandQS()
+      + '&_=' + Date.now();
+    v.src = url;
+    v.load();
+    _cutterTryPlay(v);
+  }
+
+  async function cutterLoadFile(path, title) {
+    cutterState.filePath = path;
+    cutterState.duration = 0;
+    cutterState.sessionId = Math.random().toString(36).slice(2, 12);
+    cutterState.streamStart = 0;
+
+    document.getElementById('cutter-dropzone').style.display = 'none';
+    document.getElementById('cutter-player-wrap').style.display = '';
+    document.getElementById('mark-start').value = '';
+    document.getElementById('mark-end').value = '';
+    document.getElementById('tc-current').textContent = '00:00:00';
+    document.getElementById('tc-total').textContent = '00:00:00';
+    const fname = document.getElementById('cutter-file-name');
+    const base = (title || path.split(/[\\/]/).pop() || '');
+    fname.textContent = base;
+    fname.title = path;
+    const sl = document.getElementById('cutter-slider');
+    sl.value = 0;
+    _cutterPaintSlider(sl);
+
+    try {
+      // ffprobe w tle: dokładny czas trwania → max customowej osi czasu.
+      const r = await fetch('/api/cutter/info?path=' + encodeURIComponent(path));
+      const info = await r.json();
+      if (!r.ok) throw new Error(info.error || 'info failed');
+      cutterState.duration = info.duration || 0;
+      document.getElementById('tc-total').textContent = _cutterFmtTC(cutterState.duration);
+      sl.max = cutterState.duration;
+      sl.step = Math.max(0.1, cutterState.duration / 2000);
+      console.log('[cutter] info', info);
+      _cutterUpdateSrc(0);
+    } catch (e) {
+      console.error('[cutter] info error', e);
+      showToast('Nie mogę pobrać metadanych pliku: ' + e.message, true);
+    }
+  }
+
+  function _cutterOnSliderInput(e) {
+    // Visual only — bez fetch. Odpala się przy KAŻDYM pikselu drag.
+    const t = parseFloat(e.target.value) || 0;
+    document.getElementById('tc-current').textContent = _cutterFmtTC(t);
+    _cutterPaintSlider(e.target);
+  }
+  function _cutterOnSliderChange(e) {
+    // Seek po puszczeniu suwaka (change) + debounce 200 ms — strzałki
+    // klawiatury emitują change przy każdym kroku, bez debounce backend
+    // dostawałby serię restartów ffmpeg.
+    cutterState.dragging = false;
+    const t = parseFloat(e.target.value) || 0;
+    clearTimeout(_cutterSeekTimer);
+    _cutterSeekTimer = setTimeout(() => _cutterUpdateSrc(t), 200);
+  }
+
+  async function cutterReset() {
+    const v = document.getElementById('cutter-video');
+    try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
+    if (cutterState.sessionId) {
+      try {
+        await fetch('/api/cutter/live-stop?session=' + encodeURIComponent(cutterState.sessionId),
+                    { method: 'POST' });
+      } catch (e) {}
+    }
+    cutterState.filePath = '';
+    cutterState.duration = 0;
+    cutterState.sessionId = '';
+    cutterState.streamStart = 0;
+    cutterState.dragging = false;
+    clearTimeout(_cutterSeekTimer);
+    document.getElementById('cutter-player-wrap').style.display = 'none';
+    document.getElementById('cutter-dropzone').style.display = '';
+    const loader = document.getElementById('cutter-video-loader');
+    if (loader) loader.hidden = true;
+    _cutterSyncPlayIcon();
+  }
+
+  function cutterSetMark(which) {
+    // Przechwytuje aktualną sekundę z customowej osi czasu → HH:MM:SS.
+    const t = parseFloat(document.getElementById('cutter-slider').value) || 0;
+    const input = document.getElementById(which === 'start' ? 'mark-start' : 'mark-end');
+    input.value = _cutterFmtTC(t);
+    if (window.anime?.animate) {
+      anime.animate(input, { scale: [1.06, 1], duration: 260, ease: 'outBack(2)' });
+    }
+  }
+
+  // Player + slider init.
+  (function initCutterPlayer() {
+    const sl = document.getElementById('cutter-slider');
+    if (sl) {
+      sl.addEventListener('input', _cutterOnSliderInput);
+      sl.addEventListener('change', _cutterOnSliderChange);
+      // Flaga drag przez pointer events — celowo nie activeElement:
+      // range input trzyma focus po puszczeniu i timeupdate przestałby
+      // aktualizować pozycję suwaka do końca sesji.
+      sl.addEventListener('pointerdown', () => { cutterState.dragging = true; });
+      sl.addEventListener('pointerup',   () => { cutterState.dragging = false; });
+      sl.addEventListener('pointercancel', () => { cutterState.dragging = false; });
+      _cutterPaintSlider(sl);
+    }
+
+    const v = document.getElementById('cutter-video');
+    if (!v) return;
+    const hideLoader = () => {
+      const loader = document.getElementById('cutter-video-loader');
+      if (loader) loader.hidden = true;
+    };
+    v.addEventListener('loadeddata', hideLoader);
+    v.addEventListener('playing', hideLoader);
+    v.addEventListener('play',  _cutterSyncPlayIcon);
+    v.addEventListener('pause', _cutterSyncPlayIcon);
+    v.addEventListener('ended', _cutterSyncPlayIcon);
+    v.addEventListener('volumechange', _cutterSyncMuteIcon);
+    v.addEventListener('timeupdate', () => {
+      const t = (cutterState.streamStart || 0) + v.currentTime;
+      const sl2 = document.getElementById('cutter-slider');
+      if (cutterState.dragging) return;  // user właśnie celuje suwakiem
+      document.getElementById('tc-current').textContent = _cutterFmtTC(t);
+      if (sl2) {
+        sl2.value = Math.min(t, parseFloat(sl2.max) || t);
+        _cutterPaintSlider(sl2);
+      }
+    });
+    v.addEventListener('error', () => {
+      hideLoader();
+      console.error('[cutter] video error', v.error && v.error.message);
+    });
+
+    // Spacja = play/pauza gdy zakładka Cutter aktywna i fokus poza polami.
+    document.addEventListener('keydown', e => {
+      if (e.code !== 'Space') return;
+      const cutterActive = document.getElementById('cutter')?.classList.contains('active');
+      if (!cutterActive || !cutterState.filePath) return;
+      const el = document.activeElement;
+      const tag = (el?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable) return;
+      e.preventDefault();
+      cutterTogglePlay();
+    });
+  })();
+
+  // Cleanup gdy user zmienia zakładkę (uwolnij ffmpeg CPU)
+  window.addEventListener('cutter:tab-left', () => {
+    if (!cutterState.sessionId) return;
+    fetch('/api/cutter/live-stop?session=' + encodeURIComponent(cutterState.sessionId),
+          { method: 'POST' }).catch(() => {});
+    const v = document.getElementById('cutter-video');
+    try { v.pause(); } catch (e) {}
+  });
+
+  // Dropzone init
+  (function initCutterDropzone() {
+    const dz = document.getElementById('cutter-dropzone');
+    const inp = document.getElementById('cutter-file-input');
+    if (!dz || !inp) return;
+    dz.addEventListener('click', async () => {
+      // Bierzemy ścieżkę przez Qt file dialog (WebView nie eksponuje path z <input type=file>).
+      if (window.wpBridge?.pick_open_file) {
+        const p = await window.wpBridge.pick_open_file('', 'Wideo (*.mp4 *.mkv *.webm *.mov);;Wszystkie pliki (*)');
+        if (p) cutterLoadFile(p, p.split(/[\\/]/).pop());
+      } else {
+        // Fallback dla dev-browser bez Qt bridge (nie kliknie w bundlu ale dev tests OK).
+        inp.click();
+      }
+    });
+    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+    dz.addEventListener('drop', async e => {
+      e.preventDefault();
+      dz.classList.remove('dragover');
+      // QtWebEngine drop zdarzenie NIE udostępnia local file path dla security.
+      // Otwórz Qt file dialog żeby pobrać właściwą ścieżkę.
+      if (window.wpBridge?.pick_open_file) {
+        const p = await window.wpBridge.pick_open_file('', 'Wideo (*.mp4 *.mkv *.webm *.mov);;Wszystkie pliki (*)');
+        if (p) cutterLoadFile(p, p.split(/[\\/]/).pop());
+      }
+    });
+    ['cutter-logo-src', 'cutter-src-text', 'cutter-outro-src'].forEach(id => {
+      document.getElementById(id).addEventListener('input', refreshCutterHint);
+      document.getElementById(id).addEventListener('change', refreshCutterHint);
+    });
+    refreshCutterHint();
+  })();
+
+  /** Podpowiedź trybu renderu pod przyciskiem WYTNIJ — z informacją
+      o overlapie outro, gdy ustawiony. */
+  function refreshCutterHint() {
+    const modeHint = document.getElementById('cutter-mode-hint');
+    if (!modeHint) return;
+    const logo = document.getElementById('cutter-logo-src').value;
+    const text = document.getElementById('cutter-src-text').value.trim();
+    const outro = document.getElementById('cutter-outro-src').value;
+    const branded = !!(logo || text || outro || cutterState.subOverlay);
+    if (!branded) {
+      modeHint.textContent = Math.abs(cutterState.audioVolume - 100) >= 1
+        ? 'Tryb Supersoniczny (wideo `-c copy`) + mixer audio ' + Math.round(cutterState.audioVolume) + '%'
+        : 'Bez brandingu — tryb Supersoniczny (`-c copy`, ~2 s)';
+      return;
+    }
+    const gpu = navigator.platform.includes('Mac') ? 'videotoolbox' : 'nvenc/x264';
+    let txt = 'Z brandingiem — tryb Ekspresowy (GPU h264_' + gpu + ')';
+    if (cutterState.subOverlay) txt += ' · SUB na starcie i przed tyłówką';
+    if (outro && cutterState.outroOverlap > 0) {
+      txt += ' · outro nałożone ' + cutterState.outroOverlap.toFixed(1) + ' s przed końcem';
+    }
+    modeHint.textContent = txt;
+  }
+
+  // Custom logo / outro pickers przez Qt file dialog
+  (function initCutterCustomPickers() {
+    const logoSel = document.getElementById('cutter-logo-src');
+    const outroSel = document.getElementById('cutter-outro-src');
+    if (logoSel) logoSel.addEventListener('change', async e => {
+      if (e.target.value !== 'custom') return;
+      if (window.wpBridge?.pick_open_file) {
+        const p = await window.wpBridge.pick_open_file('', 'PNG z alfa (*.png)');
+        if (p) { cutterState.customLogoPath = p; _cutterRefreshPreview(); }
+        else e.target.value = 'default';  // anulował → wróć do default
+      }
+    });
+    if (outroSel) outroSel.addEventListener('change', async e => {
+      if (e.target.value !== 'custom') return;
+      if (window.wpBridge?.pick_open_file) {
+        const p = await window.wpBridge.pick_open_file('', 'Wideo z alfą lub bez (*.mp4 *.mkv *.mov *.webm)');
+        if (p) cutterState.customOutroPath = p;
+        else e.target.value = '';
+      }
+    });
+  })();
+
+  // Suwaki brandingu: badge z wartością, persist w localStorage i debounce
+  // restartu podglądu — parametry logo wstrzykiwane do filter_complex
+  // strumienia live (backend /api/cutter/live-stream).
+  (function initBrandSliders() {
+    const defs = [
+      // Skala logo: klucz persist zależny od wariantu (default = cała
+      // grafika 1920x1080 bazowo 100%, custom = ułamek szerokości ~16%).
+      { id: 'logo-scale',
+        key: () => (document.getElementById('cutter-logo-src').value === 'default'
+                    ? 'wp-cutter-logo-scale-def' : 'wp-cutter-logo-scale'),
+        state: 'logoScale',
+        fmt: v => Math.round(v) + '%',  refresh: true },
+      { id: 'logo-x',        key: 'wp-cutter-logo-x',     state: 'logoX',
+        fmt: v => Math.round(v) + ' px', refresh: true },
+      { id: 'logo-y',        key: 'wp-cutter-logo-y',     state: 'logoY',
+        fmt: v => Math.round(v) + ' px', refresh: true },
+      // Overlap nie restartuje podglądu: dotyczy wyłącznie końcówki renderu
+      // (overlay outro przed końcem wycinka) — strumień podglądu i tak by
+      // tego nie pokazał, a restart ffmpeg kosztuje.
+      { id: 'outro-overlap', key: 'wp-cutter-overlap',    state: 'outroOverlap',
+        fmt: v => v.toFixed(1) + ' s',  refresh: false },
+      // Mixer: podgląd gra z docelową głośnością (restart strumienia).
+      { id: 'cutter-volume', key: 'wp-cutter-volume',     state: 'audioVolume',
+        fmt: v => Math.round(v) + '%',  refresh: true },
+      // Źródło: rozmiar + marginesy X/Y — podgląd renderuje napis na żywo,
+      // więc każda zmiana restartuje strumień (z debouncem).
+      { id: 'src-size',      key: 'wp-cutter-src-size',   state: 'srcSize',
+        fmt: v => Math.round(v) + ' px', refresh: true },
+      { id: 'src-x',         key: 'wp-cutter-src-x',      state: 'srcX',
+        fmt: v => Math.round(v) + ' px', refresh: true },
+      { id: 'src-y',         key: 'wp-cutter-src-y',      state: 'srcY',
+        fmt: v => Math.round(v) + ' px', refresh: true },
+    ];
+    defs.forEach(d => {
+      const el = document.getElementById(d.id);
+      const badge = document.getElementById(d.id + '-val');
+      if (!el || !badge) return;
+      const keyOf = () => (typeof d.key === 'function' ? d.key() : d.key);
+      const saved = parseFloat(localStorage.getItem(keyOf()));
+      if (!Number.isNaN(saved)) el.value = saved;
+      const apply = (persist) => {
+        const v = parseFloat(el.value) || 0;
+        cutterState[d.state] = v;
+        badge.textContent = d.fmt(v);
+        _cutterPaintSlider(el);
+        if (persist) { try { localStorage.setItem(keyOf(), String(v)); } catch (e) {} }
+      };
+      apply(false);
+      el.addEventListener('input', () => {
+        apply(true);
+        if (d.refresh) _cutterRefreshPreview();
+        if (d.id === 'outro-overlap') refreshCutterHint();
+      });
+    });
+    // Zmiana wariantu logo / rogu również przełącza overlay w podglądzie
+    ['cutter-logo-src', 'cutter-logo-pos'].forEach(id => {
+      document.getElementById(id)?.addEventListener('change', _cutterRefreshPreview);
+    });
+    // Pozycja źródła: persist (tl = bazowa) + live podgląd
+    const srcPosSel = document.getElementById('cutter-src-pos');
+    if (srcPosSel) {
+      const savedPos = localStorage.getItem('wp-cutter-src-pos');
+      if (savedPos && [...srcPosSel.options].some(o => o.value === savedPos)) {
+        srcPosSel.value = savedPos;
+      }
+      cutterState.srcPos = srcPosSel.value;
+      srcPosSel.addEventListener('change', () => {
+        cutterState.srcPos = srcPosSel.value;
+        try { localStorage.setItem('wp-cutter-src-pos', srcPosSel.value); } catch (e) {}
+        _cutterRefreshPreview();
+      });
+    }
+    // Wpisywanie tekstu źródła też odświeża podgląd (debounce w refreshu)
+    document.getElementById('cutter-src-text')
+      ?.addEventListener('input', _cutterRefreshPreview);
+
+    // Suwaki logo aktywne dla OBU wariantów. Semantyka i pamięć wartości
+    // per wariant: default = skala całej grafiki 1920x1080 (bazowo 100% =
+    // fullframe 0:0, kotwica prawy-górny), custom = ułamek szerokości
+    // kadru (bazowo 16%, max 40%). Róg (dropdown) dotyczy tylko custom.
+    function syncLogoControls() {
+      const variant = document.getElementById('cutter-logo-src').value;
+      const scaleEl = document.getElementById('logo-scale');
+      ['logo-scale', 'logo-x', 'logo-y'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.disabled = !variant;
+        el.closest('.brand-slider-row')?.classList.toggle('disabled', !variant);
+      });
+      const posSel = document.getElementById('cutter-logo-pos');
+      if (posSel) {
+        const posActive = variant === 'custom';
+        posSel.disabled = !posActive;
+        posSel.closest('.setting-row')?.classList.toggle('disabled', !posActive);
+      }
+      if (scaleEl && variant) {
+        // Zakres i zapamiętana wartość zależne od wariantu
+        const isDef = variant === 'default';
+        scaleEl.max = isDef ? 100 : 40;
+        const key = isDef ? 'wp-cutter-logo-scale-def' : 'wp-cutter-logo-scale';
+        const saved = parseFloat(localStorage.getItem(key));
+        scaleEl.value = Number.isNaN(saved) ? (isDef ? 100 : 16) : saved;
+        scaleEl.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
+    document.getElementById('cutter-logo-src')?.addEventListener('change', syncLogoControls);
+    syncLogoControls();
+
+    // Checkbox animacji subskrypcji: persist + live podgląd + hint trybu
+    const subCb = document.getElementById('cutter-sub-check');
+    if (subCb) {
+      subCb.checked = localStorage.getItem('wp-cutter-sub') === '1';
+      cutterState.subOverlay = subCb.checked;
+      subCb.addEventListener('change', () => {
+        cutterState.subOverlay = subCb.checked;
+        try { localStorage.setItem('wp-cutter-sub', subCb.checked ? '1' : '0'); } catch (e) {}
+        _cutterRefreshPreview();
+        refreshCutterHint();
+      });
+    }
+    refreshCutterHint();
+  })();
+
+  // Skrót z listy pobranych ("Nożyczki")
+  window.addEventListener('cutter:load-file', e => {
+    const { path } = e.detail || {};
+    if (path) cutterLoadFile(path, '');
+  });
+
+  async function cutterRender() {
+    if (!cutterState.filePath) {
+      showToast('Najpierw załaduj plik wideo', true);
+      return;
+    }
+    const start = _cutterParseTC(document.getElementById('mark-start').value);
+    const end   = _cutterParseTC(document.getElementById('mark-end').value);
+    if (start === null || end === null) {
+      showToast('Podaj START i KONIEC w formacie HH:MM:SS', true);
+      return;
+    }
+    if (end <= start) {
+      showToast('KONIEC musi być po STARCIE', true);
+      return;
+    }
+    if (!window.wpBridge || typeof window.wpBridge.pick_save_file !== 'function') {
+      showToast('Mostek Qt niedostępny', true);
+      return;
+    }
+    // Sugerowana nazwa: bazuje na basename input pliku + _cut.mp4
+    const base = (cutterState.filePath.split(/[\\/]/).pop() || 'material').replace(/\.[^.]+$/, '');
+    const suggested = base + '_cut.mp4';
+    // QFileDialog.getSaveFileName przez wpBridge — callback po wybraniu / anulowaniu
+    window.wpBridge.pick_save_file(suggested, 'MP4 (*.mp4);;Wszystkie pliki (*)', async function(outPath) {
+      if (!outPath) {
+        showToast('Anulowano zapis');
+        return;
+      }
+      const payload = {
+        input_path: cutterState.filePath,
+        start_ts: start,
+        end_ts: end,
+        output_path: outPath,
+        logo_src: document.getElementById('cutter-logo-src').value,
+        logo_pos: document.getElementById('cutter-logo-pos').value,
+        logo_custom_path: cutterState.customLogoPath,
+        logo_scale: cutterState.logoScale / 100,
+        logo_x: cutterState.logoX,
+        logo_y: cutterState.logoY,
+        src_text: document.getElementById('cutter-src-text').value.trim(),
+        src_size: Math.round(cutterState.srcSize),
+        src_pos: cutterState.srcPos,
+        src_x: Math.round(cutterState.srcX),
+        src_y: Math.round(cutterState.srcY),
+        outro_src: document.getElementById('cutter-outro-src').value,
+        outro_custom_path: cutterState.customOutroPath,
+        outro_overlap: cutterState.outroOverlap,
+        audio_volume: cutterState.audioVolume / 100,
+        sub_overlay: cutterState.subOverlay,
+      };
+      const r = await fetch('/api/cutter/render', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        showToast(d.error || 'Błąd cutter', true);
+        return;
+      }
+      showToast('Render w toku — sprawdź Historię pobierania. Tryb: ' + (d.mode === 'copy' ? 'supersoniczny (~2 s)' : 'GPU accel'));
+      // Progress leci przez WebSocket task_update → renderTasks(). Zero polling.
+    });
   }
 </script>
 </body>

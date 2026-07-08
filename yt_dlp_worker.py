@@ -138,6 +138,10 @@ class YtDlpWorker:
         self.manager = manager
         self._stop_events: dict[str, threading.Event] = {}
         self._graceful_kill_ids: set[str] = set()
+        # Referencje do żywych ffmpeg remux procesów. Kluczowe dla graceful stop:
+        # bez SIGINT hard-kill zniszczy MP4 (brak moov atom). SIGINT daje ffmpeg
+        # czas na finalize header — plik nadaje się do Cuttera bez korupcji.
+        self._active_ffmpeg: dict[str, asyncio.subprocess.Process] = {}
         manager.set_worker(self)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -151,9 +155,24 @@ class YtDlpWorker:
             ev.set()
 
     def graceful_stop(self, task_id: str) -> None:
-        """Stop download immediately but flag it for post-stop merge."""
+        """Stop download immediately but flag it for post-stop merge.
+
+        Wysyła też SIGINT (Unix) lub CTRL_BREAK_EVENT (Windows) do żywego
+        ffmpeg remux subprocess dla tego zadania — pozwala ffmpeg dokończyć
+        zapis moov atom i zamknąć plik czysto. Bez tego hard-kill w trakcie
+        remux zostawia MP4 bez indeksu (niegotowy dla Fast Cutter / QuickTime).
+        """
         self._graceful_kill_ids.add(task_id)
         self.kill_task(task_id)
+        ff = self._active_ffmpeg.get(task_id)
+        if ff and ff.returncode is None:
+            try:
+                import signal
+                sig = signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGINT
+                ff.send_signal(sig)
+                logger.info("SIGINT wysłany do ffmpeg (task=%s)", task_id)
+            except Exception as e:
+                logger.warning("SIGINT ffmpeg failed (task=%s): %s", task_id, e)
 
     def stop(self) -> None:
         for ev in self._stop_events.values():
@@ -795,13 +814,24 @@ class YtDlpWorker:
         ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
         cmd = [ffmpeg, "-y", "-i", ts_path, "-c", "copy", "-movflags", "+faststart", mp4_path]
         logger.info(f"FFmpeg TS→MP4: {' '.join(cmd)}")
+        # CREATE_NEW_PROCESS_GROUP na Windows — bez tego send_signal(CTRL_BREAK_EVENT)
+        # z graceful_stop() by trafił w cały nasz proces Python zamiast tylko w ffmpeg.
+        creationflags = 0x00000200 if sys.platform == "win32" else 0
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=creationflags,
             )
-            _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=600)
+            if task_id:
+                # Rejestracja — graceful_stop wysyła SIGINT tutaj gdy user klika Stop
+                self._active_ffmpeg[task_id] = proc
+            try:
+                _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=600)
+            finally:
+                if task_id:
+                    self._active_ffmpeg.pop(task_id, None)
             success = proc.returncode == 0
             if not success and stderr_data:
                 logger.error(f"FFmpeg TS→MP4 stderr: {stderr_data.decode(errors='replace').strip()}")
