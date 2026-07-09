@@ -26,3 +26,5 @@ DOKUMENTACJA.pdf
 
 # PyInstaller spec (generated automatically)
 *.spec
+# Zero-dependency: bundlowane binarki (ffmpeg/ffprobe/yt-dlp/deno) — pobierane przez build_local.sh
+bin/

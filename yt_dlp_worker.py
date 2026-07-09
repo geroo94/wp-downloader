@@ -18,6 +18,7 @@ from typing import Any
 from yt_dlp import YoutubeDL
 import yt_dlp.utils
 
+from binaries import get_ffmpeg, get_ffprobe, get_ffmpeg_location
 from download_manager import DownloadManager, DownloadTask
 
 logger = logging.getLogger(__name__)
@@ -402,7 +403,7 @@ class YtDlpWorker:
         ext = os.path.splitext(output_path)[1].lower()
         if ext not in (".mp4", ".mkv", ".mov", ".m4v"):
             return
-        ffprobe = shutil.which("ffprobe") or "ffprobe"
+        ffprobe = get_ffprobe()
         try:
             proc = await asyncio.create_subprocess_exec(
                 ffprobe, "-v", "error", "-select_streams", "v:0",
@@ -419,7 +420,7 @@ class YtDlpWorker:
         logger.info(f"Re-encoding {output_path} from {codec} to H.264…")
         await self.manager.update_task(task_id, status="merging",
                                        live_status=f"Konwertowanie z {codec} do H.264…")
-        ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+        ffmpeg = get_ffmpeg()
         temp_out = output_path + ".h264.tmp.mp4"
         cmd = [
             ffmpeg, "-y", "-i", output_path,
@@ -456,6 +457,12 @@ class YtDlpWorker:
             "nocheckcertificate": True,
             "no_playlist": True,
         }
+        # Zero-dependency: scalanie wideo+audio i post-processing yt-dlp ma
+        # użyć NASZYCH bundlowanych binarek, nie szukać ffmpeg/ffprobe w PATH.
+        # ffmpeg_location wskazuje katalog z ffmpeg ORAZ ffprobe (bin/).
+        _ffloc = get_ffmpeg_location()
+        if _ffloc:
+            opts["ffmpeg_location"] = _ffloc
         url_lc = (task.url or "").lower()
         is_youtube_live = (task.live_record and
                            ("youtube.com" in url_lc or "youtu.be" in url_lc))
@@ -611,7 +618,7 @@ class YtDlpWorker:
             logger.info("Graceful stop: plik już pod docelową ścieżką")
             return True
 
-        ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+        ffmpeg = get_ffmpeg()
         fflags = ["-fflags", "+genpts+discardcorrupt"]
         oflags = ["-movflags", "+faststart"]
 
@@ -811,7 +818,7 @@ class YtDlpWorker:
         """Remux MPEG-TS to MP4 using FFmpeg -c copy."""
         if task_id:
             await self.manager.update_task(task_id, status="merging", live_status="Konwertowanie do MP4…")
-        ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+        ffmpeg = get_ffmpeg()
         cmd = [ffmpeg, "-y", "-i", ts_path, "-c", "copy", "-movflags", "+faststart", mp4_path]
         logger.info(f"FFmpeg TS→MP4: {' '.join(cmd)}")
         # CREATE_NEW_PROCESS_GROUP na Windows — bez tego send_signal(CTRL_BREAK_EVENT)

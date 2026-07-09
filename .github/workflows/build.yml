@@ -121,10 +121,21 @@ jobs:
       - name: Strip quarantine xattr from DMG
         run: xattr -dr com.apple.quarantine dist/WP_Downloader_macOS.dmg || true
 
+      # Portable — zip bezpośredni .app, bez montowania DMG/instalacji do
+      # /Applications. Mirror dual-build patternu z jobu Windows (installer +
+      # _Windows.zip). `ditto` (nie `zip -r`) zachowuje resource forks /
+      # extended attributes macOS wewnątrz .app bundla.
+      - name: Package portable ZIP
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            dist/WP_Downloader.app dist/WP_Downloader_macOS_PORTABLE.zip
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/WP_Downloader_macOS.dmg
+          files: |
+            dist/WP_Downloader_macOS.dmg
+            dist/WP_Downloader_macOS_PORTABLE.zip
           generate_release_notes: true
           name: WP Downloader ${{ github.ref_name }}
           fail_on_unmatched_files: true

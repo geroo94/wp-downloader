@@ -28,6 +28,7 @@ from pydantic import BaseModel
 import sys
 import os
 
+from binaries import get_ffmpeg, get_ffprobe
 from cutter import CutterJob, CutterManager
 from download_manager import DownloadManager
 from environment_manager import collect_system_info
@@ -672,7 +673,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
         """
         if not os.path.isfile(path):
             return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
-        cmd = ["ffprobe", "-v", "error",
+        cmd = [get_ffprobe(), "-v", "error",
                "-show_entries", "format=duration:stream=width,height,codec_name",
                "-select_streams", "v:0",
                "-of", "json", path]
@@ -712,7 +713,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
             return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
         t = max(0.0, float(t))
         w = max(160, min(1920, int(w)))
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+        cmd = [get_ffmpeg(), "-hide_banner", "-loglevel", "error",
                "-ss", f"{t:.3f}", "-i", path,
                "-frames:v", "1", "-vf", f"scale={w}:-2",
                "-f", "mjpeg", "-q:v", "3", "pipe:1"]
@@ -787,9 +788,9 @@ def create_app(manager: DownloadManager) -> FastAPI:
         # klipu, w strumieniu od dowolnej pozycji pokazujemy pełny napis,
         # żeby suwaki rozmiaru/pozycji działały na żywo).
         src_txt = (src or "").strip()[:80]
-        ffmpeg_bin = "ffmpeg"
+        ffmpeg_bin = get_ffmpeg()
         if src_txt:
-            if not await _cutter._has_filter("drawtext"):
+            if not await _cutter._has_filter("drawtext", ffmpeg_bin):
                 alt = _bundled_ffmpeg()
                 if alt and await _cutter._has_filter("drawtext", alt):
                     ffmpeg_bin = alt

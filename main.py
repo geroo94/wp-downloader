@@ -26,8 +26,6 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 import subprocess
-import urllib.request
-import zipfile
 import threading
 import logging
 from PyQt6.QtWidgets import QMessageBox, QApplication
@@ -219,56 +217,20 @@ def get_resource_path(relative_path: str) -> str:
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
-def check_and_install_ffmpeg():
-    """Sprawdza FFmpeg i instaluje go, jeśli brakuje (logika z Twojego kodu)."""
-    ffmpeg_bin = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
-    ffmpeg_missing = not (os.path.exists(ffmpeg_bin) or any(
-        os.access(os.path.join(path, ffmpeg_bin), os.X_OK) 
-        for path in os.environ.get("PATH", "").split(os.pathsep) if path
-    ))
+def verify_bundled_ffmpeg():
+    """Zero-dependency: ffmpeg/ffprobe są DOŁĄCZONE do paczki (bin/). NIE
+    instalujemy niczego w systemie usera ani nie prosimy o Homebrew.
 
-    if not ffmpeg_missing:
-        return
-
-    if sys.platform != "win32":
-        msg = "Do prawidłowego działania programu (szczególnie live streamów) wymagany jest FFmpeg.\n\n" \
-              "Nie znaleziono go w systemie. Zainstaluj go komendą:\n" \
-              "brew install ffmpeg\n\n" \
-              "Jeśli jest już zainstalowany, upewnij się, że znajduje się w /usr/local/bin lub /opt/homebrew/bin."
-        QMessageBox.warning(None, "Brak FFmpeg", msg)
-        logging.warning("FFmpeg nie został znaleziony.")
-        return
-
-    msg = "Do prawidłowego działania programu brakuje FFmpeg (wymagane do Facebooka/YouTube).\n\nCzy chcesz go teraz pobrać automatycznie?"
-    reply = QMessageBox.question(None, "Brakujące wymagania", msg, 
-                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-    
-    if reply == QMessageBox.StandardButton.Yes:
-        # Wyłączamy piaskownicę, bo w EXE często blokuje ona dostęp do zasobów GPU
-        os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
-        
-        # Logika pobierania (bez zmian, ale opakowana w logi w wywołaniu)
-        _download_ffmpeg_logic()
-    else:
-        sys.exit(0)
-
-def _download_ffmpeg_logic():
+    Ta funkcja tylko loguje, którą binarkę rozwiąże resolver — gdy z jakiegoś
+    powodu bundlowana binarka nie istnieje (uszkodzona paczka), aplikacja
+    nadal wystartuje, a Fast Cutter/merge zgłoszą czytelny błąd zamiast
+    prosić o brew install."""
     try:
-        url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-        zip_path = "ffmpeg_temp.zip"
-        urllib.request.urlretrieve(url, zip_path)
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            for file in zip_ref.namelist():
-                if file.endswith("ffmpeg.exe") or file.endswith("ffprobe.exe"):
-                    filename = os.path.basename(file)
-                    with open(filename, "wb") as f_out:
-                        f_out.write(zip_ref.read(file))
-        if os.path.exists(zip_path): os.remove(zip_path)
-        QMessageBox.information(None, "Sukces", "FFmpeg został zainstalowany.")
-    except Exception as e:
-        logging.error(f"Błąd instalacji FFmpeg: {e}")
-        QMessageBox.critical(None, "Błąd", f"Nie udało się zainstalować FFmpeg: {e}")
-        sys.exit(1)
+        from binaries import get_ffmpeg, get_ffprobe
+        logging.info("Bundlowany ffmpeg:  %s", get_ffmpeg())
+        logging.info("Bundlowany ffprobe: %s", get_ffprobe())
+    except Exception as exc:
+        logging.warning("Nie można rozwiązać ścieżek ffmpeg/ffprobe: %s", exc)
 
 if __name__ == "__main__":
     try:
@@ -296,6 +258,14 @@ if __name__ == "__main__":
         setup_overlay_site_packages()
         setup_logging()
         add_local_bin_to_path()
+        # Zero-dependency: bundlowany bin/ (ffmpeg, ffprobe, yt-dlp, deno) na
+        # POCZĄTEK PATH — każde pośrednie wyszukiwanie narzędzia trafia w nasze
+        # spakowane binarki zamiast w systemowe (Homebrew itd.).
+        try:
+            from binaries import prepend_bin_to_path
+            prepend_bin_to_path()
+        except Exception as _exc:
+            logging.warning("prepend_bin_to_path failed: %s", _exc)
 
         # Single-instance guard: prevents the WebView from staring at a dead port
         # when the user double-clicks the EXE during the FFmpeg download window.
@@ -343,8 +313,8 @@ if __name__ == "__main__":
         app_instance = QApplication(sys.argv)
         app_instance.setApplicationName("WP Downloader")
 
-        logging.info("Sprawdzanie FFmpeg...")
-        check_and_install_ffmpeg()
+        logging.info("Weryfikacja bundlowanego FFmpeg...")
+        verify_bundled_ffmpeg()
 
         logging.info("Uruchamianie AppController...")
         from app_controller import AppController

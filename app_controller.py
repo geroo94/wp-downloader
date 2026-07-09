@@ -23,6 +23,7 @@ Sekwencja startu (single-window):
 
 import logging
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -52,20 +53,29 @@ class LoadingProgress(QObject):
 
 
 def _check_and_install_deps(progress: LoadingProgress) -> None:
-    """Sprawdza zależności w wątku tła, raportuje przez sygnał ``progress``.
-    Próbuje doinstalować pip-em brakujące."""
-    import shutil
+    """Weryfikuje zależności w wątku tła i raportuje przez sygnał ``progress``.
 
+    Zero-dependency: w spakowanej aplikacji yt-dlp / streamlink / ffmpeg są
+    wbudowane, więc NIC nie instalujemy na maszynie usera. Pip-fallback dla
+    brakujących pakietów działa wyłącznie w trybie deweloperskim (nie-frozen),
+    jako wygoda przy uruchamianiu ze źródeł."""
+    from binaries import get_ffmpeg
+
+    is_frozen = hasattr(sys, "_MEIPASS")
     pip_pkgs = [("yt-dlp", "yt_dlp"), ("streamlink", "streamlink")]
     n = len(pip_pkgs)
     for i, (pkg_name, import_name) in enumerate(pip_pkgs):
-        # Skala: 10 % start → 50 % po wszystkich pakietach.
         pct = 10 + int((i / n) * 40)
         progress.progress.emit(pct, f"Sprawdzanie {pkg_name}…")
         try:
             __import__(import_name)
         except ImportError:
-            progress.progress.emit(pct, f"Instalowanie {pkg_name}…")
+            if is_frozen:
+                # Bundlowany pakiet powinien istnieć — brak = błąd builda,
+                # nie instalujemy niczego w systemie usera.
+                logger.error("Bundlowany pakiet %s niedostępny w paczce!", pkg_name)
+                continue
+            progress.progress.emit(pct, f"Instalowanie {pkg_name}… (dev)")
             try:
                 subprocess.run(
                     [sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir", pkg_name],
@@ -76,8 +86,11 @@ def _check_and_install_deps(progress: LoadingProgress) -> None:
                 logger.warning("Auto-install %s failed: %s", pkg_name, exc)
 
     progress.progress.emit(55, "Sprawdzanie ffmpeg…")
-    if not shutil.which("ffmpeg"):
-        logger.warning("ffmpeg not found in PATH")
+    ff = get_ffmpeg()
+    if ff == "ffmpeg" and not shutil.which("ffmpeg"):
+        logger.warning("Bundlowany ffmpeg nieodnaleziony — sprawdź bin/ w paczce")
+    else:
+        logger.info("ffmpeg: %s", ff)
 
 
 def _server_ready() -> bool:

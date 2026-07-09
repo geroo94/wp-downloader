@@ -25,6 +25,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
+from binaries import get_ffmpeg, get_ffprobe
+
 logger = logging.getLogger(__name__)
 
 
@@ -97,11 +99,9 @@ def _filter_path_escape(p: str) -> str:
 
 
 def _bundled_ffmpeg() -> str:
-    """Statyczna binarka ffmpeg z pakietu imageio-ffmpeg (pełny zestaw
-    filtrów, w tym drawtext/sendcmd). Fallback dla środowisk, gdzie
-    systemowy ffmpeg jest okrojony (np. brew bez libfreetype — tekst
-    źródła 'nie wyświetlał się', bo filtr nie istniał).
-    Pusta ścieżka, gdy pakiet niedostępny."""
+    """Awaryjna statyczna binarka ffmpeg z pakietu imageio-ffmpeg (pełny
+    zestaw filtrów, w tym drawtext/sendcmd). Używana tylko gdyby bundlowany
+    `bin/ffmpeg` z jakiegoś powodu nie miał drawtext. Pusta gdy niedostępna."""
     try:
         import imageio_ffmpeg
         p = imageio_ffmpeg.get_ffmpeg_exe()
@@ -192,13 +192,13 @@ class CutterManager:
         self._cap_cache[key] = ok
         return ok
 
-    async def _has_filter(self, name: str, binary: str = "ffmpeg") -> bool:
+    async def _has_filter(self, name: str, binary: str | None = None) -> bool:
         """Czy dana binarka ffmpeg ma filtr. Optymistyczne True przy błędzie
         sondy — najwyżej render padnie z czytelnym logiem."""
-        return await self._probe_caps("-filters", name, binary)
+        return await self._probe_caps("-filters", name, binary or get_ffmpeg())
 
-    async def _has_encoder(self, name: str, binary: str = "ffmpeg") -> bool:
-        return await self._probe_caps("-encoders", name, binary)
+    async def _has_encoder(self, name: str, binary: str | None = None) -> bool:
+        return await self._probe_caps("-encoders", name, binary or get_ffmpeg())
 
     # ── Asset resolution ────────────────────────────────────────────────
 
@@ -268,7 +268,7 @@ class CutterManager:
         render wtedy nadal ruszy, co najwyżej z domyślnym 1080p."""
         default = {"w": 1920, "h": 1080, "fps": 30.0, "has_audio": True, "duration": 0.0,
                    "vcodec": ""}
-        cmd = ["ffprobe", "-v", "error",
+        cmd = [get_ffprobe(), "-v", "error",
                "-show_entries",
                "format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate",
                "-of", "json", path]
@@ -331,7 +331,7 @@ class CutterManager:
         else:
             audio_args = ["-c", "copy"]
         return [
-            "ffmpeg", "-hide_banner", "-y",
+            get_ffmpeg(), "-hide_banner", "-y",
             "-ss", f"{job.start_ts:.3f}",
             "-t", f"{dur:.3f}",
             "-i", job.input_path,
@@ -351,7 +351,7 @@ class CutterManager:
         vol = self._volume_value(job)
         vol_args = ["-filter:a", f"volume={vol:.3f}"] if vol != 1.0 else []
         return [
-            "ffmpeg", "-hide_banner", "-y",
+            get_ffmpeg(), "-hide_banner", "-y",
             "-ss", f"{job.start_ts:.3f}",
             "-t", f"{dur:.3f}",
             "-i", job.input_path,
@@ -625,7 +625,7 @@ class CutterManager:
         else:
             v_map, a_map = base_v, base_a
 
-        cmd = ["ffmpeg", "-hide_banner", "-y"] + inputs + [
+        cmd = [get_ffmpeg(), "-hide_banner", "-y"] + inputs + [
             "-filter_complex", ";".join(fg),
             "-map", v_map, "-map", a_map,
             "-c:v", codec, *codec_args,
@@ -656,7 +656,7 @@ class CutterManager:
         # istniał). Render z tekstem przechodzi wtedy na bundlowaną
         # statyczną binarkę imageio-ffmpeg; dopiero gdy i jej nie ma,
         # degradujemy do renderu bez napisu.
-        ffmpeg_bin = "ffmpeg"
+        ffmpeg_bin = get_ffmpeg()
         force_sw = False
         if job.src_text.strip() and not await self._has_filter("drawtext"):
             alt = _bundled_ffmpeg()

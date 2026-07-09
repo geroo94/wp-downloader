@@ -17,14 +17,23 @@ datas = [
     ('static', 'static'),
     (_os.path.join('static', 'branding'), _os.path.join('static', 'branding')),
 ]
-# Deno binary (bin/deno[.exe]) jest pobierany przez workflow / lokalny build skrypt
-# i pakowany jako data. Na .app (mac) trafia do Contents/Resources/bin/,
-# na onedir (Win) do bin/ obok exe. yt_dlp_worker._detect_js_runtime() szuka
-# go w tych lokalizacjach zanim sięgnie po PATH — eliminuje YouTube HTTP 403
-# na czystych Windowsach bez deno w systemie.
+# ── Zero-dependency: wewnętrzny katalog bin/ ────────────────────────────
+# Statyczne binarki CLI (ffmpeg, ffprobe, yt-dlp, deno) pobierane/kopiowane
+# przez scripts/build_local.sh. Pakowane jako `datas` (NIE `binaries`) —
+# to samodzielne, statycznie linkowane executable uruchamiane jako subprocess,
+# a nie biblioteki ładowane do procesu Pythona. Sekcja `binaries` przepuściłaby
+# je przez dylib-dependency-rewriting PyInstallera, co mogłoby uszkodzić
+# statyczny build. binaries.py rozwiązuje ścieżki do nich przez _MEIPASS /
+# Contents/Resources/bin / exe_dir/bin — zero zależności od systemowego PATH.
 _bin_dir = _os.path.join(_os.path.dirname(SPEC), "bin")
-if _os.path.isdir(_bin_dir):
-    datas += [(_bin_dir, "bin")]
+assert _os.path.isdir(_bin_dir), "Brak katalogu bin/ — uruchom scripts/build_local.sh (sekcja 2/2b)"
+_required_bins = ["ffmpeg", "ffprobe", "yt-dlp", "deno"]
+for _b in _required_bins:
+    _bp = _os.path.join(_bin_dir, _b)
+    assert _os.path.isfile(_bp), (
+        f"Brak bundlowanej binarki bin/{_b} — zero-dependency wymaga jej "
+        f"w paczce (scripts/build_local.sh sekcja 2b)")
+datas += [(_bin_dir, "bin")]
 binaries = []
 hiddenimports = ['uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.asyncio', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on', 'PyQt6.QtWebEngineCore']
 tmp_ret = collect_all('fastapi')

@@ -66,17 +66,27 @@ def get_streamlink_version() -> str:
         return "brak"
 
 def get_yt_dlp_version() -> str:
-    # W wersji EXE yt-dlp nie jest w PATH, wywołujemy go przez silnik Pythona (sys.executable)
-    v = _run_version((sys.executable, "-m", "yt_dlp", "--version"))
-    if not v or v == "?":
-        # Jeśli nie zadziałało, sprawdźmy tradycyjnie w PATH
-        if shutil.which("yt-dlp"):
-            v = _run_version(("yt-dlp", "--version"))
-    return v or "brak"
+    # Zero-dependency: yt-dlp jest bundlowanym modułem Pythona — czytamy wersję
+    # in-process (bez subprocess, bez szukania w PATH).
+    try:
+        import yt_dlp.version
+        v = getattr(yt_dlp.version, "__version__", "")
+        if v:
+            return v
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version
+        return version("yt-dlp")
+    except Exception:
+        return "brak"
 
 
 def get_ffmpeg_version() -> str:
-    v = _run_version(("ffmpeg", "-version"))
+    # Wersja z bundlowanej binarki (bin/ffmpeg → imageio → PATH) — nie polega
+    # na globalnym ffmpeg w systemie.
+    from binaries import get_ffmpeg
+    v = _run_version((get_ffmpeg(), "-version"))
     return v if v and v != "?" else "brak"
 
 
