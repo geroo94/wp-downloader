@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os as _os
+import sys as _sys
 from PyInstaller.utils.hooks import collect_all
 
 # Cały frontend (index.html, JS, logo) + branding Fast Cuttera.
@@ -27,12 +28,17 @@ datas = [
 # Contents/Resources/bin / exe_dir/bin — zero zależności od systemowego PATH.
 _bin_dir = _os.path.join(_os.path.dirname(SPEC), "bin")
 assert _os.path.isdir(_bin_dir), "Brak katalogu bin/ — uruchom scripts/build_local.sh (sekcja 2/2b)"
+# Windows: wszystkie 4 binarki mają rozszerzenie .exe (deno.exe, ffmpeg.exe,
+# ffprobe.exe, yt-dlp.exe) — bez tego sufiksu asercja szuka pliku bez
+# rozszerzenia, który na Windows nigdy nie istnieje (binaries.py._exe_name()
+# stosuje tę samą regułę w runtime, więc obie strony muszą się zgadzać).
+_exe_suffix = ".exe" if _sys.platform == "win32" else ""
 _required_bins = ["ffmpeg", "ffprobe", "yt-dlp", "deno"]
 for _b in _required_bins:
-    _bp = _os.path.join(_bin_dir, _b)
+    _bp = _os.path.join(_bin_dir, _b + _exe_suffix)
     assert _os.path.isfile(_bp), (
-        f"Brak bundlowanej binarki bin/{_b} — zero-dependency wymaga jej "
-        f"w paczce (scripts/build_local.sh sekcja 2b)")
+        f"Brak bundlowanej binarki bin/{_b}{_exe_suffix} — zero-dependency wymaga jej "
+        f"w paczce (scripts/build_local.sh sekcja 2b / .github/workflows/build.yml)")
 datas += [(_bin_dir, "bin")]
 binaries = []
 hiddenimports = ['uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.asyncio', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on', 'PyQt6.QtWebEngineCore']
