@@ -117,6 +117,14 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# Windows EXE ikona MUSI być .ico (multi-res 16..256px) — surowy .png albo
+# rzuca błąd w PyInstallerze, albo daje rozmazaną 16x16 ikonę w Eksploratorze/
+# Start menu. CI (build-windows) generuje static/wp_logo.ico przed tym krokiem
+# ("Build multi-res ICO"); na macOS/dev tego pliku nie ma — .png wystarcza,
+# bo BUNDLE() poniżej i tak konwertuje go do .icns przez Pillow.
+_ico_path = _os.path.join(_os.path.dirname(SPEC), 'static', 'wp_logo.ico')
+_exe_icon = 'static/wp_logo.ico' if _os.path.isfile(_ico_path) else 'static/wp_logo.png'
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -133,7 +141,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['static/wp_logo.png'],
+    icon=[_exe_icon],
 )
 coll = COLLECT(
     exe,
