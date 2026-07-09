@@ -56,6 +56,36 @@ jobs:
           rm /tmp/deno.zip
           bin/deno --version
 
+      # Zero-dependency: wp_downloader.spec ma twardą asercję na obecność
+      # bin/{ffmpeg,ffprobe,yt-dlp,deno} — bez tego kroku "Build .app" pada
+      # na AssertionError zanim PyInstaller w ogóle ruszy. Mirror sekcji 2b
+      # z scripts/build_local.sh (ten sam static ffmpeg z imageio-ffmpeg,
+      # zapewnia h264_videotoolbox/libvpx-vp9/libopus/drawtext).
+      - name: Fetch static ffmpeg/ffprobe/yt-dlp binaries (macOS arm64)
+        run: |
+          mkdir -p bin
+          IMG_FF=$(python3 -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
+          cp "$IMG_FF" bin/ffmpeg
+          chmod +x bin/ffmpeg
+
+          curl -L --silent --show-error -o /tmp/ffprobe.gz \
+            "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0/ffprobe-darwin-arm64.gz"
+          gunzip -f /tmp/ffprobe.gz && mv /tmp/ffprobe bin/ffprobe
+          chmod +x bin/ffprobe
+
+          curl -L --silent --show-error -o bin/yt-dlp \
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+          chmod +x bin/yt-dlp
+
+          for b in ffmpeg ffprobe yt-dlp; do
+            echo "  $b: $(bin/$b -version 2>/dev/null || bin/$b --version 2>/dev/null | head -n1)"
+          done
+          _FILTERS=$(bin/ffmpeg -hide_banner -filters 2>/dev/null || true)
+          case "$_FILTERS" in
+            *" drawtext "*) echo "  ✓ bin/ffmpeg ma drawtext" ;;
+            *) echo "::error::bin/ffmpeg bez drawtext"; exit 1 ;;
+          esac
+
       # Używamy .spec zamiast build_app.py, żeby info_plist (CFBundleName,
       # CFBundleShortVersionString, LSMinimumSystemVersion, NSCamera/Microphone
       # usage description) wszedł do docelowego .app. Bez tych kluczy bundle
@@ -170,6 +200,34 @@ jobs:
           Expand-Archive -Path deno.zip -DestinationPath bin -Force
           Remove-Item deno.zip
           .\bin\deno.exe --version
+
+      # Zero-dependency: wp_downloader.spec ma twardą asercję na obecność
+      # bin/{ffmpeg,ffprobe,yt-dlp,deno}.exe — bez tego kroku "Build EXE folder"
+      # pada na AssertionError zanim PyInstaller w ogóle ruszy. GPL build
+      # (BtbN/FFmpeg-Builds) ma pełny drawtext/libvpx/libopus, ten sam
+      # publisher już używany jako fallback w main.py._download_ffmpeg_logic.
+      - name: Fetch static ffmpeg/ffprobe/yt-dlp binaries (Windows x64)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_extract -Force
+          $ffDir = Get-ChildItem -Path ffmpeg_extract -Directory | Select-Object -First 1
+          Copy-Item "$($ffDir.FullName)\bin\ffmpeg.exe" bin\ffmpeg.exe
+          Copy-Item "$($ffDir.FullName)\bin\ffprobe.exe" bin\ffprobe.exe
+          Remove-Item ffmpeg.zip
+          Remove-Item ffmpeg_extract -Recurse -Force
+
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile bin\yt-dlp.exe
+
+          .\bin\ffmpeg.exe -version
+          .\bin\ffprobe.exe -version
+          $filters = & .\bin\ffmpeg.exe -hide_banner -filters 2>$null | Out-String
+          if ($filters -notmatch " drawtext ") {
+            Write-Error "bin/ffmpeg.exe bez drawtext"
+            exit 1
+          }
+          Write-Host "  OK bin/ffmpeg.exe ma drawtext"
 
       # Multi-res ICO (16/32/48/64/128/256) — Inno Setup używa najmniejszej
       # wersji do icon overlay w menu Start, większych do "Add/Remove Programs".
