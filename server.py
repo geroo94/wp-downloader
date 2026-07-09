@@ -175,6 +175,55 @@ def _fmt_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def _fmt_srt_ts(seconds: float) -> str:
+    """SRT wymaga przecinka (nie kropki) i milisekund: HH:MM:SS,mmm."""
+    seconds = max(0.0, float(seconds))
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int(round((seconds - int(seconds)) * 1000))
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _dir_size(path: str) -> int:
+    """Rozmiar katalogu w bajtach (rekurencyjnie). 0 gdy nie istnieje/błąd."""
+    total = 0
+    try:
+        for root, _dirs, files in os.walk(path):
+            for f in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
+
+
+def _human_size(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def _segments_to_srt(segments: list[dict]) -> str:
+    """Buduje poprawny SubRip (.srt) z segmentów whisper (start/end/text)."""
+    blocks = []
+    n = 0
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        n += 1
+        blocks.append(
+            f"{n}\n{_fmt_srt_ts(seg['start'])} --> {_fmt_srt_ts(seg['end'])}\n{text}\n"
+        )
+    return "\n".join(blocks)
+
+
 _WHISPER_MODEL_SIZES = ("tiny", "base", "small", "medium", "large", "large-v2", "large-v3")
 
 # Per-rozmiar initial_prompt mocno biases Whisper na kierunek "to jest polski język"
@@ -286,20 +335,31 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
                 result = model.transcribe(video_path, **kwargs)
             finally:
                 _wt.tqdm.tqdm = _orig_tqdm
+            segments = result.get("segments", [])
             lines = []
-            for seg in result.get("segments", []):
+            for seg in segments:
                 text = seg["text"].strip()
                 if text:
                     lines.append(f"[{_fmt_ts(seg['start'])}] {text}")
-            return "\n".join(lines) if lines else result.get("text", "").strip()
+            plain = "\n".join(lines) if lines else result.get("text", "").strip()
+            return plain, segments
 
-        text = await asyncio.wait_for(loop.run_in_executor(None, _transcribe), timeout=3600)
+        plain_text, segments = await asyncio.wait_for(
+            loop.run_in_executor(None, _transcribe), timeout=3600)
         # encoding="utf-8" wymusza poprawny zapis polskich diakrytyków na Windowsie
         # (gdzie default to cp1250); dodajemy newline na końcu pliku (POSIX).
         with open(txt_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
-            if text and not text.endswith("\n"):
+            f.write(plain_text)
+            if plain_text and not plain_text.endswith("\n"):
                 f.write("\n")
+        # SRT — dokładne start/end per segment (nie tylko [HH:MM:SS] jak w .txt).
+        # Zapisywany zawsze obok .txt, żeby zakładka Transkrypcja mogła od razu
+        # zaoferować "Zapisz jako .SRT" bez ponownego przebiegu Whisper.
+        srt_path = os.path.splitext(video_path)[0] + ".srt"
+        srt_text = _segments_to_srt(segments)
+        if srt_text:
+            with open(srt_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(srt_text)
         await manager.update_task(task_id, transcription=txt_path)
         logger.info("Transkrypcja gotowa (%s/%s): %s", model_size, language or "auto", txt_path)
     except ImportError:
@@ -587,6 +647,74 @@ def create_app(manager: DownloadManager) -> FastAPI:
         asyncio.create_task(perform_system_update(manager, delay=0))
         return JSONResponse({"ok": True, "message": "Rozpoczęto aktualizację wszystkich komponentów."})
 
+    @app.post("/api/system/clear-cache")
+    async def clear_cache():
+        """Bezpiecznie czyści tymczasowe/cache foldery aplikacji:
+          - cache pobierania yt-dlp (~/.cache/yt-dlp, yt_dlp.cache.Cache.remove()
+            ma wbudowany safety-check że ścieżka zawiera "cache"/"tmp")
+          - osierocone pliki .sendcmd (typewriter Fast Cuttera) w systemowym temp
+            — normalnie sprzątane w cutter.py._run() finally, zostają tylko po
+            crashu w trakcie renderu
+          - cache osadzonego Chromium (DawnCache/GPUCache/VideoDecodeStats/
+            Shared Dictionary/blob_storage w ~/.wp_downloader) — celowo NIE
+            ruszamy Cookies/Local Storage/Session Storage/History: to ustawienia
+            usera (suwaki Fast Cuttera, cookies do importu, rozmiar okna), nie cache
+        """
+        freed = 0
+        details: list[str] = []
+
+        # 1. yt-dlp cache
+        try:
+            import yt_dlp
+            ydl = yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True})
+            cache_dir = ydl.cache._get_root_dir()
+            if os.path.isdir(cache_dir):
+                size = _dir_size(cache_dir)
+                ydl.cache.remove()
+                freed += size
+                if size:
+                    details.append(f"yt-dlp cache: {_human_size(size)}")
+        except Exception as e:
+            logger.warning("clear_cache: yt-dlp cache fail: %s", e)
+
+        # 2. Osierocone pliki .sendcmd (Fast Cutter typewriter) w systemowym temp
+        try:
+            import glob
+            import tempfile as _tempfile
+            for p in glob.glob(os.path.join(_tempfile.gettempdir(), "*.sendcmd")):
+                try:
+                    freed += os.path.getsize(p)
+                    os.remove(p)
+                except OSError:
+                    pass
+        except Exception as e:
+            logger.warning("clear_cache: sendcmd sweep fail: %s", e)
+
+        # 3. Cache osadzonego Chromium — tylko jednoznaczne podkatalogi cache,
+        # NIE Cookies/Local Storage/Session Storage/History (ustawienia usera).
+        try:
+            import shutil
+            qtwe_dir = os.path.join(os.path.expanduser("~"), ".wp_downloader")
+            for sub in ("DawnCache", "GPUCache", "VideoDecodeStats",
+                        "Shared Dictionary", "blob_storage"):
+                p = os.path.join(qtwe_dir, sub)
+                if os.path.isdir(p):
+                    size = _dir_size(p)
+                    shutil.rmtree(p, ignore_errors=True)
+                    freed += size
+                    if size:
+                        details.append(f"{sub}: {_human_size(size)}")
+        except Exception as e:
+            logger.warning("clear_cache: chromium cache fail: %s", e)
+
+        logger.info("clear_cache: zwolniono %s (%s)", _human_size(freed), "; ".join(details) or "brak")
+        return JSONResponse({
+            "ok": True,
+            "freed_bytes": freed,
+            "freed_human": _human_size(freed),
+            "details": details,
+        })
+
     @app.post("/api/tasks/{task_id}/cancel")
     async def cancel_task(task_id: str):
         ok = await queue_mgr.cancel(task_id)
@@ -640,6 +768,62 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 model_size = raw_size
         asyncio.create_task(_run_transcription(manager, task_id, task.output_path, language, model_size))
         return JSONResponse({"ok": True, "language": language or "auto", "model_size": model_size})
+
+    # ── Zakładka Transkrypcja: pliki z dysku, niezwiązane z Historią ────
+
+    @app.post("/api/transcribe/file")
+    async def transcribe_file(payload: dict):
+        """Transkrybuje dowolny plik audio/wideo wskazany przez file picker
+        (nie musi pochodzić z Historii pobierania). Rejestruje lekki task
+        `job_type='transcribe_standalone'` — progres leci tym samym WebSocket
+        task_update co reszta, ale karta nie pojawia się w Historii (JS filtruje)."""
+        input_path = (payload.get("input_path") or "").strip()
+        if not input_path or not os.path.isfile(input_path):
+            return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
+        language = "pl"
+        model_size = "small"
+        raw_lang = (payload.get("language") or "").strip().lower()
+        if raw_lang == "auto" or raw_lang == "":
+            language = ""
+        elif re.fullmatch(r"[a-z]{2,3}", raw_lang):
+            language = raw_lang
+        raw_size = (payload.get("model_size") or "").strip().lower()
+        if raw_size in _WHISPER_MODEL_SIZES:
+            model_size = raw_size
+        title = os.path.basename(input_path)
+        task_id = manager.add_transcribe_task(title=title, input_path=input_path)
+        asyncio.create_task(_run_transcription(manager, task_id, input_path, language, model_size))
+        return JSONResponse({"task_id": task_id, "language": language or "auto", "model_size": model_size})
+
+    @app.get("/api/transcribe/result")
+    async def transcribe_result(path: str):
+        """Zwraca treść gotowego pliku .txt (path = to co przyszło w polu
+        `transcription` po zakończeniu — patrz task_update)."""
+        if not os.path.isfile(path):
+            return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+        except OSError as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"text": text})
+
+    @app.post("/api/transcribe/save-as")
+    async def transcribe_save_as(payload: dict):
+        """Kopiuje gotowy .txt/.srt (już wygenerowany obok pliku źródłowego
+        przez _run_transcription) do lokalizacji wybranej w SaveAs dialogu."""
+        src = (payload.get("src_path") or "").strip()
+        dest = (payload.get("dest_path") or "").strip()
+        if not src or not os.path.isfile(src):
+            return JSONResponse({"error": "Plik źródłowy nie istnieje"}, status_code=404)
+        if not dest:
+            return JSONResponse({"error": "Brak ścieżki docelowej"}, status_code=400)
+        try:
+            import shutil
+            shutil.copyfile(src, dest)
+        except OSError as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"ok": True, "path": dest})
 
     @app.post("/api/tasks/{task_id}/reveal")
     async def reveal_task_file(task_id: str):

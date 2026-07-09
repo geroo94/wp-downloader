@@ -798,6 +798,17 @@
     .acc-body { height: 0; overflow: hidden; }
     .acc-inner { padding-top: 14px; }
 
+    /* ── Transkrypcja ───────────────────────────────────────────────── */
+    .transcribe-textarea {
+      width: 100%; min-height: 220px; margin-top: 10px;
+      padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--surf-subtle); color: var(--text-1);
+      font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px;
+      line-height: 1.55; resize: vertical;
+    }
+    .transcribe-textarea:focus { outline: none; border-color: var(--red); }
+    .transcribe-result-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
     /* ── Fast Cutter ────────────────────────────────────────────────── */
     .cutter-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; }
     @media (max-width: 900px) { .cutter-grid { grid-template-columns: 1fr; } }
@@ -908,6 +919,11 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 10px;
+    }
+    .cutter-marks-reset-row { display: flex; justify-content: center; }
+    .cutter-reset-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 12px; padding: 6px 14px; height: auto;
     }
     .cutter-mark-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
     .cutter-mark-lbl {
@@ -1111,6 +1127,7 @@
     <button class="tab-btn active" data-tab="downloader" onclick="switchTab('downloader', this)">Pobieranie</button>
     <button class="tab-btn" data-tab="streams" onclick="switchTab('streams', this)">Live Streamy</button>
     <button class="tab-btn" data-tab="cutter" onclick="switchTab('cutter', this)">Fast Cutter</button>
+    <button class="tab-btn" data-tab="transkrypcja" onclick="switchTab('transkrypcja', this)">Transkrypcja</button>
     <button class="tab-btn" data-tab="settings" onclick="switchTab('settings', this)">Ustawienia</button>
     <button class="tab-btn" data-tab="console-tab" onclick="switchTab('console-tab', this)">Konsola</button>
     <span class="tab-indicator" id="tab-indicator"></span>
@@ -1292,6 +1309,16 @@
                   Ustaw jako KONIEC <span class="mark-arrow">]]</span>
                 </button>
               </div>
+              <div class="cutter-marks-reset-row">
+                <button type="button" class="btn-secondary cutter-reset-btn" onclick="cutterResetMarks()"
+                        title="Przywróć START/KONIEC do pełnej długości materiału">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="1 4 1 10 7 10"/>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                  </svg>
+                  Resetuj zakres
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1452,6 +1479,78 @@
     </div>
   </div>
 
+  <div id="transkrypcja" class="tab-content">
+    <div class="card">
+      <div class="section-label">Transkrypcja</div>
+      <div class="cutter-grid">
+        <!-- LEWA: dropzone / plik + wynik -->
+        <div class="cutter-left">
+          <div id="transcribe-dropzone" class="cutter-dropzone">
+            <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 4v16M4 12h16"/>
+            </svg>
+            <div class="dz-title">Przeciągnij plik audio/wideo lub kliknij, aby wybrać</div>
+            <div class="dz-hint">MP3, WAV, MP4, MKV i inne formaty obsługiwane przez ffmpeg</div>
+            <input type="file" id="transcribe-file-input" accept="audio/*,video/*" style="display:none">
+          </div>
+          <div id="transcribe-file-wrap" style="display:none">
+            <div class="cutter-transport">
+              <span id="transcribe-file-name" class="cutter-file-name" title=""></span>
+              <button type="button" class="btn-about-link" onclick="transcribeReset()">Zmień plik</button>
+            </div>
+            <div id="transcribe-progress-wrap" class="progress-wrap" style="display:none; margin-top:8px">
+              <div class="progress-bar transcribing" id="transcribe-progress-bar" data-prog="0"></div>
+            </div>
+            <div id="transcribe-progress-label" class="dl-speed" style="display:none"></div>
+            <textarea id="transcribe-result" class="transcribe-textarea"
+                      placeholder="Tu pojawi się gotowa transkrypcja…" readonly></textarea>
+            <div class="transcribe-result-actions" id="transcribe-result-actions" style="display:none">
+              <button type="button" class="btn-secondary" onclick="transcribeCopyToClipboard()">Kopiuj do schowka</button>
+              <button type="button" class="btn-secondary" onclick="transcribeSaveAs('txt')">Zapisz jako .TXT</button>
+              <button type="button" class="btn-secondary" onclick="transcribeSaveAs('srt')">Zapisz jako .SRT</button>
+            </div>
+          </div>
+        </div>
+        <!-- PRAWA: ustawienia + start -->
+        <div class="cutter-right">
+          <div class="section-label" style="margin-top:0">Ustawienia</div>
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">Język</div>
+              <div class="setting-desc">Explicit język redukuje halucynacje Whisper.</div>
+            </div>
+            <select id="transcribe-language" class="cutter-select">
+              <option value="pl" selected>Polski</option>
+              <option value="en">Angielski</option>
+              <option value="uk">Ukraiński</option>
+              <option value="de">Niemiecki</option>
+              <option value="es">Hiszpański</option>
+              <option value="fr">Francuski</option>
+              <option value="">Auto-detekcja</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">Model Whisper</div>
+              <div class="setting-desc">Większy model = lepsza jakość, wolniejszy i więcej RAM.</div>
+            </div>
+            <select id="transcribe-model" class="cutter-select">
+              <option value="tiny">Tiny (najszybszy)</option>
+              <option value="base">Base</option>
+              <option value="small" selected>Small (zalecany)</option>
+              <option value="medium">Medium</option>
+              <option value="large-v3">Large-v3 (najdokładniejszy)</option>
+            </select>
+          </div>
+          <button type="button" class="btn-primary" id="transcribe-start-btn"
+                  onclick="transcribeStart()" style="width:100%; margin-top:8px;" disabled>
+            Uruchom transkrypcję
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="console-tab" class="tab-content">
     <div class="card">
       <div class="section-label">Logi systemowe</div>
@@ -1583,6 +1682,13 @@
           <div class="setting-desc">Szczegółowy dziennik zdarzeń — przydatny przy zgłaszaniu błędów.</div>
         </div>
         <button class="btn-about-link" onclick="showLogs()">Pokaż logi</button>
+      </div>
+      <div class="setting-row">
+        <div class="setting-meta">
+          <div class="setting-name">Pamięć podręczna aplikacji</div>
+          <div class="setting-desc">Cache pobierania yt-dlp, osierocone pliki tymczasowe Fast Cuttera oraz cache osadzonej przeglądarki. Nie rusza ustawień ani zapisanych ciasteczek.</div>
+        </div>
+        <button type="button" class="btn-secondary" id="clear-cache-btn" onclick="clearAppCache()">Wyczyść pamięć podręczną</button>
       </div>
       </div></div>
     </div>
@@ -1925,6 +2031,12 @@
         if (data.transcription && data.transcription !== 'in_progress' && data.transcription !== 'error'
             && prevTranscription === 'in_progress') {
           playSound('transcription');
+        }
+        // Zakładka Transkrypcja: task_id pliku z dysku (nie z Historii) —
+        // aktualizuje pasek postępu i wynik wewnątrz tej zakładki.
+        if (typeof transcribeState !== 'undefined' && data.task_id === transcribeState.taskId
+            && transcribeState.taskId) {
+          _transcribeOnTaskUpdate(data);
         }
         renderTasks();
       } else if (data.type === 'update_log') {
@@ -2390,7 +2502,10 @@
   // wartości; przebudowa następuje wyłącznie przy zmianie struktury.
   function renderTasks() {
     const list = document.getElementById('task-list');
-    const taskArr = Object.values(tasks);
+    // transcribe_standalone = plik z dysku transkrybowany z zakładki
+    // Transkrypcja — żyje tylko w `tasks{}` dla WS lookup, nie pokazuje się
+    // w Historii (ma własny pasek postępu wewnątrz swojej zakładki).
+    const taskArr = Object.values(tasks).filter(t => t.job_type !== 'transcribe_standalone');
 
     if (taskArr.length === 0) {
       list.innerHTML = `<div class="empty">
@@ -2711,6 +2826,27 @@
     localStorage.setItem('wp-cookies-file', path);
     refreshCookiesFileLabel();
     showToast('Wskazano plik cookies: ' + path.split(/[\\/]/).pop());
+  }
+
+  async function clearAppCache() {
+    const btn = document.getElementById('clear-cache-btn');
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Czyszczenie…';
+    try {
+      const r = await fetch('/api/system/clear-cache', { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) {
+        showToast(d.error || 'Błąd czyszczenia cache', true);
+      } else {
+        showToast('Zwolniono ' + (d.freed_human || '0 B') + ' miejsca na dysku');
+      }
+    } catch (e) {
+      showToast('Błąd sieci: ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
   }
 
   async function showLogs() {
@@ -3474,6 +3610,23 @@
     }
   }
 
+  /** Resetuje zakres cięcia do pełnej długości materiału bez przeładowania
+      pliku od zera — cofa START/KONIEC, rozwija suwak do pełnej osi czasu
+      i przewija podgląd na pozycję 0. Plik (cutterState.filePath/duration/
+      sessionId) zostaje ten sam. */
+  function cutterResetMarks() {
+    if (!cutterState.filePath) return;
+    document.getElementById('mark-start').value = _cutterFmtTC(0);
+    document.getElementById('mark-end').value = _cutterFmtTC(cutterState.duration);
+    const sl = document.getElementById('cutter-slider');
+    sl.max = cutterState.duration;
+    sl.value = 0;
+    _cutterPaintSlider(sl);
+    document.getElementById('tc-current').textContent = _cutterFmtTC(0);
+    _cutterUpdateSrc(0);
+    showToast('Zakres cięcia zresetowany do pełnej długości materiału');
+  }
+
   // Player + slider init.
   (function initCutterPlayer() {
     const sl = document.getElementById('cutter-slider');
@@ -3840,6 +3993,167 @@
       // Progress leci przez WebSocket task_update → renderTasks(). Zero polling.
     });
   }
+
+  // ── Transkrypcja: plik z dysku (niezależnie od Historii) ────────────
+  const transcribeState = { filePath: '', taskId: '', txtPath: '', srtPath: '' };
+
+  function transcribeLoadFile(path) {
+    transcribeState.filePath = path;
+    transcribeState.taskId = '';
+    transcribeState.txtPath = '';
+    transcribeState.srtPath = '';
+    document.getElementById('transcribe-dropzone').style.display = 'none';
+    document.getElementById('transcribe-file-wrap').style.display = '';
+    document.getElementById('transcribe-file-name').textContent = path.split(/[\\/]/).pop();
+    document.getElementById('transcribe-file-name').title = path;
+    document.getElementById('transcribe-result').value = '';
+    document.getElementById('transcribe-result-actions').style.display = 'none';
+    document.getElementById('transcribe-progress-wrap').style.display = 'none';
+    document.getElementById('transcribe-progress-label').style.display = 'none';
+    const btn = document.getElementById('transcribe-start-btn');
+    btn.disabled = false;
+    btn.textContent = 'Uruchom transkrypcję';
+  }
+
+  function transcribeReset() {
+    transcribeState.filePath = '';
+    transcribeState.taskId = '';
+    document.getElementById('transcribe-file-wrap').style.display = 'none';
+    document.getElementById('transcribe-dropzone').style.display = '';
+  }
+
+  async function transcribeStart() {
+    if (!transcribeState.filePath) return;
+    const language = document.getElementById('transcribe-language').value;
+    const model_size = document.getElementById('transcribe-model').value;
+    const btn = document.getElementById('transcribe-start-btn');
+    btn.disabled = true;
+    btn.textContent = 'Transkrypcja w toku…';
+    const progWrap = document.getElementById('transcribe-progress-wrap');
+    const progLbl = document.getElementById('transcribe-progress-label');
+    progWrap.style.display = '';
+    progLbl.style.display = '';
+    progLbl.textContent = 'Transkrypcja Whisper… 0%';
+    document.getElementById('transcribe-progress-bar').dataset.prog = 0;
+    document.getElementById('transcribe-progress-bar').style.width = '0%';
+    try {
+      const r = await fetch('/api/transcribe/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input_path: transcribeState.filePath, language, model_size }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        showToast(d.error || 'Błąd transkrypcji', true);
+        btn.disabled = false;
+        btn.textContent = 'Uruchom transkrypcję';
+        return;
+      }
+      transcribeState.taskId = d.task_id;
+      // Postęp i wynik przychodzą przez globalny WebSocket task_update (patrz handler).
+    } catch (e) {
+      showToast('Błąd sieci: ' + e.message, true);
+      btn.disabled = false;
+      btn.textContent = 'Uruchom transkrypcję';
+    }
+  }
+
+  /** Wywoływane z globalnego WS task_update handlera gdy task_id pasuje do
+      aktywnej transkrypcji tej zakładki. */
+  async function _transcribeOnTaskUpdate(data) {
+    const pct = Math.round(data.transcription_progress || 0);
+    const progLbl = document.getElementById('transcribe-progress-label');
+    const progBar = document.getElementById('transcribe-progress-bar');
+    if (progBar) { progBar.dataset.prog = pct; progBar.style.width = pct + '%'; }
+    if (progLbl) progLbl.textContent = `Transkrypcja Whisper… ${pct}%`;
+
+    if (data.transcription === 'error') {
+      showToast('Transkrypcja nieudana', true);
+      const btn = document.getElementById('transcribe-start-btn');
+      btn.disabled = false;
+      btn.textContent = 'Uruchom transkrypcję';
+      document.getElementById('transcribe-progress-wrap').style.display = 'none';
+      document.getElementById('transcribe-progress-label').style.display = 'none';
+      return;
+    }
+    if (data.transcription && data.transcription !== 'in_progress') {
+      // Gotowe — data.transcription to ścieżka do .txt.
+      transcribeState.txtPath = data.transcription;
+      transcribeState.srtPath = data.transcription.replace(/\.txt$/, '.srt');
+      document.getElementById('transcribe-progress-wrap').style.display = 'none';
+      document.getElementById('transcribe-progress-label').style.display = 'none';
+      const btn = document.getElementById('transcribe-start-btn');
+      btn.disabled = false;
+      btn.textContent = 'Uruchom transkrypcję';
+      try {
+        const r = await fetch('/api/transcribe/result?path=' + encodeURIComponent(data.transcription));
+        const d = await r.json();
+        document.getElementById('transcribe-result').value = d.text || '';
+        document.getElementById('transcribe-result-actions').style.display = '';
+        showToast('Transkrypcja gotowa');
+      } catch (e) {
+        showToast('Nie mogę odczytać wyniku: ' + e.message, true);
+      }
+    }
+  }
+
+  function transcribeCopyToClipboard() {
+    const ta = document.getElementById('transcribe-result');
+    if (!ta.value) return;
+    navigator.clipboard.writeText(ta.value)
+      .then(() => showToast('Skopiowano do schowka'))
+      .catch(() => showToast('Nie udało się skopiować', true));
+  }
+
+  async function transcribeSaveAs(ext) {
+    const srcPath = ext === 'srt' ? transcribeState.srtPath : transcribeState.txtPath;
+    if (!srcPath) { showToast('Brak gotowego pliku ' + ext.toUpperCase(), true); return; }
+    if (!window.wpBridge?.pick_save_file) return;
+    const suggested = srcPath.split(/[\\/]/).pop();
+    const filter = ext === 'srt' ? 'Napisy SRT (*.srt)' : 'Plik tekstowy (*.txt)';
+    window.wpBridge.pick_save_file(suggested, filter, async function (destPath) {
+      if (!destPath) return;
+      try {
+        const r = await fetch('/api/transcribe/save-as', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ src_path: srcPath, dest_path: destPath }),
+        });
+        const d = await r.json();
+        if (!r.ok) { showToast(d.error || 'Błąd zapisu', true); return; }
+        showToast('Zapisano: ' + destPath.split(/[\\/]/).pop());
+      } catch (e) {
+        showToast('Błąd sieci: ' + e.message, true);
+      }
+    });
+  }
+
+  // Dropzone: mirror wzorca z Fast Cuttera (Qt file dialog — WebView nie
+  // eksponuje realnej ścieżki z <input type=file> ani z drop eventu).
+  (function initTranscribeDropzone() {
+    const dz = document.getElementById('transcribe-dropzone');
+    const inp = document.getElementById('transcribe-file-input');
+    if (!dz || !inp) return;
+    const FILTER = 'Audio/Wideo (*.mp3 *.wav *.m4a *.aac *.flac *.mp4 *.mkv *.webm *.mov *.avi);;Wszystkie pliki (*)';
+    dz.addEventListener('click', async () => {
+      if (window.wpBridge?.pick_open_file) {
+        const p = await window.wpBridge.pick_open_file('', FILTER);
+        if (p) transcribeLoadFile(p);
+      } else {
+        inp.click();
+      }
+    });
+    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+    dz.addEventListener('drop', async e => {
+      e.preventDefault();
+      dz.classList.remove('dragover');
+      if (window.wpBridge?.pick_open_file) {
+        const p = await window.wpBridge.pick_open_file('', FILTER);
+        if (p) transcribeLoadFile(p);
+      }
+    });
+  })();
 </script>
 </body>
 </html>

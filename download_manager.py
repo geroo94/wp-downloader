@@ -128,6 +128,25 @@ class DownloadManager:
         self.tasks[task_id] = task
         return task_id
 
+    def add_transcribe_task(self, title: str, input_path: str) -> str:
+        """Rejestruje task typu 'transcribe_standalone' (zakładka Transkrypcja,
+        plik z dysku — nie z Historii). Progress leci przez ten sam
+        WebSocket task_update co reszta, ale renderTasks() w JS filtruje ten
+        job_type z listy Historii — karta żyje tylko wewnątrz zakładki."""
+        task_id = str(uuid.uuid4())[:8]
+        task = DownloadTask(
+            task_id=task_id,
+            url="",
+            format_id="",
+            quality="",
+            title=title,
+            status="done",
+            output_path=(input_path or "").strip(),
+            job_type="transcribe_standalone",
+        )
+        self.tasks[task_id] = task
+        return task_id
+
     def get_all_tasks(self) -> list:
         return [
             {
