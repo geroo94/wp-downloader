@@ -22,6 +22,7 @@ class DownloadTask:
     downloaded_size: str = ""
     live_status: str = ""
     transcription: str = ""  # "" = not started, "in_progress", path = done, "error"
+    transcription_progress: float = 0.0  # 0-100, tylko gdy transcription == "in_progress"
     cookies_browser: str = ""  # "chrome" / "firefox" / "safari" / "edge" / ""
     cookies_file: str = ""  # ścieżka do wyeksportowanego cookies.txt (priorytet nad browser)
     speed_str: str = ""
@@ -90,17 +91,6 @@ class DownloadManager:
             return True
         return await self.remove_task(task_id)
 
-    async def reorder_tasks(self, task_id_list: list[str]):
-        new_tasks = {}
-        for tid in task_id_list:
-            if tid in self.tasks:
-                new_tasks[tid] = self.tasks[tid]
-        for tid, task in self.tasks.items():
-            if tid not in new_tasks:
-                new_tasks[tid] = task
-        self.tasks = new_tasks
-        await self.broadcast({"type": "reorder_success"})
-
     def add_task(self, url: str, format_id: str, quality: str, output_path: str = "", live_record: bool = False, cookies_browser: str = "", cookies_file: str = "", wait_for_video: bool = False) -> str:
         task_id = str(uuid.uuid4())[:8]
         task = DownloadTask(
@@ -154,6 +144,7 @@ class DownloadManager:
             "downloaded_size": t.downloaded_size,
             "live_status": t.live_status,
             "transcription": t.transcription,
+            "transcription_progress": round(t.transcription_progress, 1),
             "speed_str": t.speed_str,
             "job_type": t.job_type,
             }
@@ -190,6 +181,7 @@ class DownloadManager:
             "downloaded_size": task.downloaded_size,
             "live_status": task.live_status,
             "transcription": task.transcription,
+            "transcription_progress": round(task.transcription_progress, 1),
             "speed_str": task.speed_str,
             "job_type": task.job_type,
         })

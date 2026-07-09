@@ -208,6 +208,21 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
         import whisper
 
         def _transcribe() -> str:
+            # Frozen bundle (PyInstaller) czasem nie widzi systemowego magazynu
+            # certyfikatów CA — whisper.load_model() ściąga wagi modelu przez
+            # urllib z serwerów OpenAI i pada na
+            # ssl.SSLCertVerificationError: CERTIFICATE_VERIFY_FAILED.
+            # Wyłączamy weryfikację TYLKO dla tego pobrania (nie dotyka innych
+            # połączeń HTTPS w aplikacji poza tym, że ssl to atrybut modułowy —
+            # patch działa od pierwszego wywołania transkrypcji w tym procesie).
+            import ssl
+            try:
+                _create_unverified_https_context = ssl._create_unverified_context
+            except AttributeError:
+                pass
+            else:
+                ssl._create_default_https_context = _create_unverified_https_context
+
             model = whisper.load_model(model_size)
             # Parametry zoptymalizowane pod jakość transkrypcji polskiej:
             # - task="transcribe" (nie "translate" które zamienia na angielski)
@@ -237,7 +252,40 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
                 if language in _INITIAL_PROMPTS:
                     kwargs["initial_prompt"] = _INITIAL_PROMPTS[language]
 
-            result = model.transcribe(video_path, **kwargs)
+            # Real progress: whisper.transcribe() prowadzi wewnętrzny tqdm nad
+            # liczbą ramek audio (verbose=False => pasek aktywny, tylko nie
+            # drukowany). Podmieniamy klasę tqdm na czas tego wywołania, żeby
+            # przechwycić postęp i przekazać go do UI przez update_task —
+            # whisper nie ma publicznego progress callbacku, więc to jedyny
+            # nieinwazyjny sposób na realny procent zamiast statycznej "in_progress".
+            #
+            # UWAGA: `import whisper.transcribe as _wt` daje FUNKCJĘ, nie moduł —
+            # whisper/__init__.py robi `from .transcribe import transcribe`, co
+            # nadpisuje atrybut `whisper.transcribe` (submodule) nazwą funkcji
+            # o tej samej nazwie. sys.modules omija to nadpisanie i daje prawdziwy
+            # moduł z dostępem do jego wewnętrznego `tqdm`.
+            _wt = sys.modules["whisper.transcribe"]
+            last_pct = -1
+
+            class _ProgressTqdm(_wt.tqdm.tqdm):
+                def update(self_tqdm, n=1):
+                    super().update(n)
+                    nonlocal last_pct
+                    if self_tqdm.total:
+                        pct = min(99, int(self_tqdm.n / self_tqdm.total * 100))
+                        if pct != last_pct:
+                            last_pct = pct
+                            asyncio.run_coroutine_threadsafe(
+                                manager.update_task(task_id, transcription_progress=float(pct)),
+                                loop,
+                            )
+
+            _orig_tqdm = _wt.tqdm.tqdm
+            _wt.tqdm.tqdm = _ProgressTqdm
+            try:
+                result = model.transcribe(video_path, **kwargs)
+            finally:
+                _wt.tqdm.tqdm = _orig_tqdm
             lines = []
             for seg in result.get("segments", []):
                 text = seg["text"].strip()
@@ -539,13 +587,6 @@ def create_app(manager: DownloadManager) -> FastAPI:
         asyncio.create_task(perform_system_update(manager, delay=0))
         return JSONResponse({"ok": True, "message": "Rozpoczęto aktualizację wszystkich komponentów."})
 
-    @app.post("/api/tasks/reorder")
-    async def reorder_tasks(payload: dict):
-        """Zmienia kolejność zadań w managerze (wymaga implementacji reorder_tasks w managerze)."""
-        task_ids = payload.get("task_ids", [])
-        await manager.reorder_tasks(task_ids)
-        return JSONResponse({"ok": True})
-
     @app.post("/api/tasks/{task_id}/cancel")
     async def cancel_task(task_id: str):
         ok = await queue_mgr.cancel(task_id)
@@ -744,7 +785,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
                                  logo_src: str = "", logo_custom: str = "",
                                  logo_pos: str = "tr", logo_scale: float = 0.16,
                                  logo_x: int = 20, logo_y: int = 20,
-                                 vol: float = 1.0, sub: int = 0,
+                                 vol: float = 1.0, sub: int = 0, sub_custom: str = "",
                                  src: str = "", src_size: int = 28,
                                  src_pos: str = "tl",
                                  source_x: int = 24, source_y: int = 24):
@@ -780,9 +821,13 @@ def create_app(manager: DownloadManager) -> FastAPI:
         # dokładne okna czasowe stosuje dopiero finalny render.
         from cutter import (_bundled_ffmpeg, _default_sub_path,
                             _drawtext_fontfile, _filter_path_escape)
-        sub_file = _default_sub_path() if int(sub) else ""
-        if sub_file and not os.path.isfile(sub_file):
-            sub_file = ""
+        sub_file = ""
+        if int(sub):
+            if sub_custom and os.path.isfile(sub_custom):
+                sub_file = sub_custom
+            else:
+                p = _default_sub_path()
+                sub_file = p if os.path.isfile(p) else ""
 
         # Tekst źródła w podglądzie (statyczny — typewriter to efekt startu
         # klipu, w strumieniu od dowolnej pozycji pokazujemy pełny napis,
@@ -1038,6 +1083,8 @@ def create_app(manager: DownloadManager) -> FastAPI:
         audio_volume: float = 1.0
         # Animowany przycisk subskrypcji na starcie i przed tyłówką
         sub_overlay: bool = False
+        # Własny plik animacji SUB — puste/nieistniejące → fallback do domyślnego
+        sub_custom_path: str = ""
         # Jeśli podane (user wybrał SaveAs w UI), nadpisuje auto-generated
         # path w CutterManager._output_path. Pusty = zapisz obok źródła.
         output_path: str = ""
@@ -1050,7 +1097,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
             return JSONResponse({"error": "Zły zakres czasu (koniec musi być po starcie)"}, status_code=400)
         request_id = uuid.uuid4().hex
 
-        # Tytuł dla karty w Historii pobierania: nazwa pliku wynikowego lub źródła
+        # Tytuł dla karty w Historii: nazwa pliku wynikowego lub źródła
         display_target = (req.output_path or req.input_path)
         display_title = f"{os.path.basename(display_target)} (cut)"
 
@@ -1083,6 +1130,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
             audio_volume=min(2.0, max(0.0, float(req.audio_volume
                                                  if req.audio_volume is not None else 1.0))),
             sub_overlay=bool(req.sub_overlay),
+            sub_custom_path=req.sub_custom_path,
             output_path=(req.output_path or ""),
             download_task_id=dm_task_id,
         )

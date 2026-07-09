@@ -143,6 +143,9 @@ class CutterJob:
     # Animowany przycisk subskrypcji (alfa): overlay na starcie wycinka
     # i drugi raz tak, by skończył się dokładnie przed wejściem outro.
     sub_overlay: bool = False
+    # Własny plik animacji SUB (alternatywa dla bundlowanego sub_button.mov).
+    # Puste lub nieistniejący plik → fallback do domyślnego.
+    sub_custom_path: str = ""
     # Link do zadania w DownloadManager — pozwala propagować progress do UI
     # Historii pobierania (przez WebSocket task_update). Pusty = tryb standalone.
     download_task_id: str = ""
@@ -226,6 +229,8 @@ class CutterManager:
     def _resolve_sub(self, job: CutterJob) -> str:
         if not job.sub_overlay:
             return ""
+        if job.sub_custom_path and os.path.isfile(job.sub_custom_path):
+            return job.sub_custom_path
         p = _default_sub_path()
         return p if os.path.isfile(p) else ""
 

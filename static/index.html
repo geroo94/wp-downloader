@@ -425,7 +425,6 @@
       transition: transform .18s var(--ease-spring), box-shadow .18s ease,
                   border-color .18s ease, background 0.12s ease;
     }
-    .task.dragging { opacity: 0.4; background: var(--surf-subtle); }
     .task:hover {
       background: var(--surf-hover);
       transform: translateY(-1px);
@@ -497,13 +496,14 @@
     .progress-bar {
       height: 3px; border-radius: 99px; width: 0%;
     }
-    .progress-bar.downloading { background: var(--red); }
-    .progress-bar.rendering   { background: var(--red); }
-    .progress-bar.done        { background: #22c55e; }
-    .progress-bar.error       { background: #f97316; }
-    .progress-bar.cancelled   { background: #D1D5DB; }
+    .progress-bar.downloading  { background: var(--red); }
+    .progress-bar.rendering    { background: var(--red); }
+    .progress-bar.transcribing { background: #6D28D9; }
+    .progress-bar.done         { background: #22c55e; }
+    .progress-bar.error        { background: #f97316; }
+    .progress-bar.cancelled    { background: #D1D5DB; }
 
-    /* Fast Cutter render — karta w Historii pobierania */
+    /* Fast Cutter render — karta w Historii */
     .task-thumb-render {
       background: rgba(227,0,15,.08) !important;
     }
@@ -640,9 +640,6 @@
     .task-actions .danger:hover { background: #FFF5F5; }
     .task-actions .warning { border-color: #FDE68A; color: #92400E; background: #FFFBEB; }
     .task-actions .warning:hover { background: #FEF3C7; }
-
-    .drag-handle { cursor: grab; color: #DDDDD9; padding: 0 4px; font-size: 12px; transition: color 0.15s; }
-    .task:hover .drag-handle { color: #ADADAA; }
 
     /* Live timer */
     .live-timer { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 4px; white-space: nowrap; }
@@ -1370,6 +1367,13 @@
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
           </div>
+          <div class="setting-row" id="cutter-sub-custom-row" style="display:none">
+            <div class="setting-meta">
+              <div class="setting-name">Plik animacji SUB</div>
+              <div class="setting-desc" id="cutter-sub-custom-desc">Domyślny (bundlowany sub_button.mov)</div>
+            </div>
+            <button type="button" class="btn-secondary" id="cutter-sub-custom-btn">Wybierz wideo…</button>
+          </div>
 
           <div class="setting-row">
             <div class="setting-meta">
@@ -1618,8 +1622,8 @@
 
   <!-- Karta kolejki -->
   <div class="card">
-    <div class="section-label">Historia pobierania</div>
-    <div id="task-list" ondragover="event.preventDefault()">
+    <div class="section-label">Historia</div>
+    <div id="task-list">
       <div class="empty">Brak zadań — wklej link i kliknij Pobierz</div>
     </div>
   </div>
@@ -1909,6 +1913,15 @@
         // Dźwięki powiadomień
         if (data.status === 'done' && prevStatus !== 'done') playSound('done');
         else if (data.status === 'error' && prevStatus !== 'error') playSound('error');
+        // Fast Cutter: po udanym renderze wyciętego materiału auto-załaduj
+        // wynikowy plik do playera — natychmiastowy podgląd efektu (branding,
+        // outro, sub) bez ręcznego wskazywania pliku. Tylko dla renderu
+        // zainicjowanego z TEJ sesji cuttera (pendingRenderTaskId dopasowany).
+        if (data.job_type === 'render' && data.status === 'done' && prevStatus !== 'done'
+            && data.output_path && data.task_id === cutterState.pendingRenderTaskId) {
+          cutterState.pendingRenderTaskId = '';
+          cutterLoadFile(data.output_path, data.output_path.split(/[\\/]/).pop());
+        }
         if (data.transcription && data.transcription !== 'in_progress' && data.transcription !== 'error'
             && prevTranscription === 'in_progress') {
           playSound('transcription');
@@ -2214,12 +2227,17 @@
   function _patchTaskDynamic(el, t) {
     const bar = el.querySelector('.progress-bar');
     if (bar) {
-      bar.dataset.prog = (t.job_type === 'render')
-        ? Math.round(t.progress || 0) : (t.progress || 0);
+      bar.dataset.prog = (t.transcription === 'in_progress')
+        ? Math.round(t.transcription_progress || 0)
+        : (t.job_type === 'render' ? Math.round(t.progress || 0) : (t.progress || 0));
       _applyProgress(el);
     }
     const spd = el.querySelector('.dl-speed');
-    if (spd) spd.textContent = (t.status === 'downloading' && t.speed_str) ? t.speed_str : '';
+    if (spd) {
+      spd.textContent = (t.transcription === 'in_progress')
+        ? `Transkrypcja Whisper… ${Math.round(t.transcription_progress || 0)}%`
+        : ((t.status === 'downloading' && t.speed_str) ? t.speed_str : '');
+    }
     const lt = el.querySelector('.live-timer .timer-value');
     if (lt) lt.textContent = t.live_status || 'Nagrywanie…';
     const rd = el.querySelector('.render-dyn');
@@ -2313,7 +2331,12 @@
       ? `<div class="task-actions">${revealBtn}${cutterBtn}${transcribeBtn}${cloneBtn}${rm}${stopBtn}${cx}</div>` : '';
 
     let progressHtml = '';
-    if (t.live_record && t.status === 'downloading') {
+    if (t.transcription === 'in_progress') {
+      // Pasek pobierania jest w tym momencie zawsze na 100% (status='done') —
+      // przejmujemy go pod transkrypcję zamiast pokazywać drugi, osobny pasek.
+      const tp = Math.round(t.transcription_progress || 0);
+      progressHtml = `<div class="progress-wrap"><div class="progress-bar transcribing" data-prog="${tp}"></div></div><div class="dl-speed">Transkrypcja Whisper… ${tp}%</div>`;
+    } else if (t.live_record && t.status === 'downloading') {
       const statusText = escHtml(t.live_status || 'Nagrywanie…');
       progressHtml = `<div class="live-timer"><span class="timer-dot"></span><span class="timer-value">${statusText}</span></div>`;
     } else if (t.status === 'merging') {
@@ -2347,8 +2370,7 @@
       : `<span class="badge ${t.status}">${_STATUS_LABEL[t.status] || t.status}</span>`;
 
     return `
-    <div class="task ${t.status}"${animStyle} draggable="true" data-id="${rid}" ondragstart="handleDragStart(event)" ondragend="handleDragEnd(event)">
-      <div class="drag-handle">⋮⋮</div>
+    <div class="task ${t.status}"${animStyle} data-id="${rid}">
       <div class="task-thumb">${thumbHtml}</div>
       <div class="task-info">
         <div class="task-title">${escHtml(t.title || t.url)}</div>
@@ -2548,51 +2570,6 @@
     });
   }
   initTaskListDelegation();
-
-  // ── Drag & Drop Logic ──────────────────────────────────
-  let draggedItem = null;
-
-  function handleDragStart(e) {
-    draggedItem = e.currentTarget;
-    e.currentTarget.classList.add('dragging');
-  }
-
-  function handleDragEnd(e) {
-    e.currentTarget.classList.remove('dragging');
-    const taskElements = document.querySelectorAll('.task');
-    const newOrderIds = Array.from(taskElements).map(el => el.getAttribute('data-id'));
-    
-    // Wyślij nową kolejność do backendu
-    fetch('/api/tasks/reorder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task_ids: newOrderIds })
-    });
-  }
-
-  document.getElementById('task-list').addEventListener('dragover', e => {
-    e.preventDefault();
-    const afterElement = getDragAfterElement(document.getElementById('task-list'), e.clientY);
-    const list = document.getElementById('task-list');
-    if (afterElement == null) {
-      list.appendChild(draggedItem);
-    } else {
-      list.insertBefore(draggedItem, afterElement);
-    }
-  });
-
-  function getDragAfterElement(container, y) {
-    const draggableElements = [...container.querySelectorAll('.task:not(.dragging)')];
-    return draggableElements.reduce((closest, child) => {
-      const box = child.getBoundingClientRect();
-      const offset = y - box.top - box.height / 2;
-      if (offset < 0 && offset > closest.offset) {
-        return { offset: offset, element: child };
-      } else {
-        return closest;
-      }
-    }, { offset: Number.NEGATIVE_INFINITY }).element;
-  }
 
   // ── Pomocnicze ─────────────────────────────────────────
   function escHtml(str) {
@@ -3275,7 +3252,8 @@
 
   const cutterState = {
     filePath: '', duration: 0, sessionId: '', streamStart: 0,
-    customLogoPath: '', customOutroPath: '',
+    customLogoPath: '', customOutroPath: '', customSubPath: '',
+    pendingRenderTaskId: '',  // download_task_id ostatniego renderu tej sesji cuttera
     dragging: false,   // user trzyma suwak — timeupdate nie nadpisuje pozycji
     // Suwaki brandingu (wartości UI: % / px / px / s) + mixer + sub + źródło
     logoScale: 16, logoX: 20, logoY: 20, outroOverlap: 0,
@@ -3307,7 +3285,10 @@
     if (Math.abs(cutterState.audioVolume - 100) >= 1) {
       qs += '&vol=' + (cutterState.audioVolume / 100).toFixed(3);
     }
-    if (cutterState.subOverlay) qs += '&sub=1';
+    if (cutterState.subOverlay) {
+      qs += '&sub=1';
+      if (cutterState.customSubPath) qs += '&sub_custom=' + encodeURIComponent(cutterState.customSubPath);
+    }
     const srcTxt = (document.getElementById('cutter-src-text')?.value || '').trim();
     if (srcTxt) {
       qs += '&src=' + encodeURIComponent(srcTxt)
@@ -3747,16 +3728,41 @@
 
     // Checkbox animacji subskrypcji: persist + live podgląd + hint trybu
     const subCb = document.getElementById('cutter-sub-check');
+    const subCustomRow = document.getElementById('cutter-sub-custom-row');
+    const subCustomBtn = document.getElementById('cutter-sub-custom-btn');
+    const subCustomDesc = document.getElementById('cutter-sub-custom-desc');
+    function _syncSubCustomRow() {
+      if (subCustomRow) subCustomRow.style.display = (subCb && subCb.checked) ? '' : 'none';
+      if (subCustomDesc) {
+        subCustomDesc.textContent = cutterState.customSubPath
+          ? cutterState.customSubPath.split(/[\\/]/).pop()
+          : 'Domyślny (bundlowany sub_button.mov)';
+      }
+    }
     if (subCb) {
       subCb.checked = localStorage.getItem('wp-cutter-sub') === '1';
       cutterState.subOverlay = subCb.checked;
+      cutterState.customSubPath = localStorage.getItem('wp-cutter-sub-path') || '';
       subCb.addEventListener('change', () => {
         cutterState.subOverlay = subCb.checked;
         try { localStorage.setItem('wp-cutter-sub', subCb.checked ? '1' : '0'); } catch (e) {}
+        _syncSubCustomRow();
         _cutterRefreshPreview();
         refreshCutterHint();
       });
     }
+    if (subCustomBtn) subCustomBtn.addEventListener('click', async () => {
+      if (!window.wpBridge?.pick_open_file) return;
+      const p = await window.wpBridge.pick_open_file(
+        '', 'Wideo z alfą (*.mov *.mp4 *.mkv *.webm);;Wszystkie pliki (*)');
+      if (p) {
+        cutterState.customSubPath = p;
+        try { localStorage.setItem('wp-cutter-sub-path', p); } catch (e) {}
+        _syncSubCustomRow();
+        _cutterRefreshPreview();
+      }
+    });
+    _syncSubCustomRow();
     refreshCutterHint();
   })();
 
@@ -3815,6 +3821,7 @@
         outro_overlap: cutterState.outroOverlap,
         audio_volume: cutterState.audioVolume / 100,
         sub_overlay: cutterState.subOverlay,
+        sub_custom_path: cutterState.customSubPath,
       };
       const r = await fetch('/api/cutter/render', {
         method: 'POST',
@@ -3826,7 +3833,10 @@
         showToast(d.error || 'Błąd cutter', true);
         return;
       }
-      showToast('Render w toku — sprawdź Historię pobierania. Tryb: ' + (d.mode === 'copy' ? 'supersoniczny (~2 s)' : 'GPU accel'));
+      // Zapamiętaj task_id tego renderu — po zakończeniu (WS task_update)
+      // auto-załadujemy wynikowy plik jako nowe źródło podglądu.
+      cutterState.pendingRenderTaskId = d.download_task_id || '';
+      showToast('Render w toku — sprawdź Historię. Tryb: ' + (d.mode === 'copy' ? 'supersoniczny (~2 s)' : 'GPU accel'));
       // Progress leci przez WebSocket task_update → renderTasks(). Zero polling.
     });
   }
