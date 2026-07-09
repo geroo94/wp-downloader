@@ -589,32 +589,48 @@ class CutterManager:
             base_a = "[asub]"
 
         out_limit: list[str] = []
+        # -shortest: dobre ogólne zabezpieczenie przeciw resztkowemu driftowi
+        # klatek (patrz uzasadnienie przy konstrukcji cmd niżej) — bezpieczne
+        # dla obu trybów teraz, gdy oba korzystają z solidnych, natywnych
+        # filtrów ffmpeg (concat / xfade+acrossfade) zamiast ręcznego
+        # tpad+overlay+amix, które w praktyce POTRAFIŁO ciąć wideo do samej
+        # długości głównego klipu (tpad milczkiem nie dokleja klatek, gdy
+        # jego wejście pochodzi z uprzednio przyciętego -ss/-t strumienia —
+        # znany, odtworzony empirycznie problem niezależny od kanału alfy).
+        use_shortest = True
         if outro:
             outro_a_src = (f"[{outro_silence_idx}:a]" if outro_silence_idx >= 0
                            else f"[{outro_idx}:a]")
             if ov > 0:
-                # ── Tryb OVERLAP: outro overlay'owane na ostatnich `ov` s
-                # materiału z poszanowaniem kanału alfa (format=auto), potem
-                # gra do końca nad zamrożoną ostatnią klatką (tpad clone).
-                # pad color=black@0.0 — przezroczyste pasy przy outro z alfą
-                # (ProRes 4444 / VP9 yuva420p); przy zwykłym yuv420p pad
-                # zostaje nieprzezroczysty jak dotąd.
-                t0 = dur - ov
-                tail = od - ov
-                total = dur + od - ov
+                # ── Tryb OVERLAP: crossfade (xfade/acrossfade) zamiast
+                # ręcznego tpad+overlay+amix. tpad=stop_mode=clone milczkiem
+                # nie dokleja klatek gdy jego input pochodzi z materiału
+                # przyciętego przez -ss/-t na wejściu (odtworzone empirycznie:
+                # wideo kończyło się na długości samego głównego klipu,
+                # ignorując całe outro, mimo poprawnego audio przez amix).
+                # xfade/acrossfade to naturalne, przetestowane prymitywy
+                # ffmpeg do crossfade dwóch klipów — wymagają zgodnego
+                # pix_fmt/rozdzielczości/fps po obu stronach (stąd identyczny
+                # łańcuch scale/pad/format/fps na outro jak w concat).
+                # xfade wymaga JAWNIE zadeklarowanego stałego fps na OBU
+                # wejściach, inaczej twardy błąd ("needs to be a constant
+                # frame rate" / "do not match"). `fps=` MUSI być OSTATNIM
+                # filtrem w łańcuchu — jeśli `setpts` idzie po nim, ffmpeg
+                # gubi metadane stałego fps i xfade znowu widzi "1/0"
+                # (odtworzone empirycznie: fps przed setpts → crash, fps po
+                # setpts → działa).
                 fg.append(
                     f"[{outro_idx}:v]scale={main_w}:{main_h}:force_original_aspect_ratio=decrease,"
-                    f"pad={main_w}:{main_h}:(ow-iw)/2:(oh-ih)/2:color=black@0.0,"
-                    f"setsar=1,fps={fps_s},setpts=PTS-STARTPTS+{t0:.3f}/TB[voutro]"
+                    f"pad={main_w}:{main_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                    f"setsar=1,format=yuv420p,setpts=PTS-STARTPTS,fps={fps_s}[voutro]"
                 )
-                fg.append(f"{base_v}tpad=stop_mode=clone:stop_duration={max(0.0, tail):.3f}[vext]")
-                fg.append(f"[vext][voutro]overlay=0:0:eof_action=pass:format=auto,"
-                          f"format=yuv420p[vfinal]")
-                fg.append(f"{base_a}apad=pad_dur={max(0.0, tail):.3f}[a0p]")
-                fg.append(f"{outro_a_src}asetpts=PTS-STARTPTS,{afmt},"
-                          f"adelay={int(t0 * 1000)}:all=1[aoutro]")
-                fg.append(f"[a0p][aoutro]amix=inputs=2:duration=first:normalize=0[afinal]")
-                out_limit = ["-t", f"{total:.3f}"]
+                fg.append(f"{base_v}fps={fps_s}[vmaincfr]")
+                fg.append(
+                    f"[vmaincfr][voutro]xfade=transition=fade:duration={ov:.3f}:"
+                    f"offset={(dur - ov):.3f}[vfinal]"
+                )
+                fg.append(f"{outro_a_src}asetpts=PTS-STARTPTS,{afmt}[aoutro]")
+                fg.append(f"{base_a}[aoutro]acrossfade=d={ov:.3f}[afinal]")
             else:
                 # ── Tryb CONCAT (overlap = 0): outro doklejone po materiale.
                 # Parametry (rozmiar/SAR/fps/pix_fmt) muszą się zgadzać,
@@ -633,9 +649,23 @@ class CutterManager:
         cmd = [get_ffmpeg(), "-hide_banner", "-y"] + inputs + [
             "-filter_complex", ";".join(fg),
             "-map", v_map, "-map", a_map,
+            # -fps_mode cfr wymusza stałą liczbę klatek/s w muxerze — dobre
+            # ogólne zabezpieczenie, choć samo w sobie NIE gwarantuje że
+            # wideo i audio skończą się w tym samym momencie (patrz -shortest
+            # niżej — to on faktycznie zamyka lukę).
+            "-fps_mode", "cfr", "-r", fps_s,
             "-c:v", codec, *codec_args,
             "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
             *out_limit,
+            # -shortest: przy łączeniu z materiałem o innym natywnym
+            # fps/kontenerze (typowe dla custom outro .mov) strumień wideo
+            # bywa o ułamek klatki KRÓTSZY niż audio — rounding przy -ss/-t
+            # trimie wejścia jest frame-based, a audio sample-based, więc
+            # drobny drift jest niemal nieunikniony. Bez -shortest odtwarzacz
+            # gra audio do końca podczas gdy wideo track już się skończył →
+            # user widzi "dźwięk leci, obraz czarny/zamrożony". -shortest
+            # kończy OBA strumienie w momencie gdy pierwszy z nich się kończy.
+            *(["-shortest"] if use_shortest else []),
             "-movflags", "+faststart",
             job.output_path,
         ]
