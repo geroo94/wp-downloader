@@ -123,10 +123,11 @@ def _check_ytdlp_update(progress: LoadingProgress) -> None:
     try:
         from server import get_overlay_dir
         overlay = get_overlay_dir()
+        from binaries import subprocess_flags
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "-q", "-U", "--no-cache-dir",
              "--target", overlay, "--upgrade-strategy=eager", "yt-dlp"],
-            timeout=25, capture_output=True,
+            timeout=25, capture_output=True, creationflags=subprocess_flags(),
         )
         progress.progress.emit(30, "yt-dlp zaktualizowany (efekt po następnym restarcie).")
     except Exception as exc:
@@ -205,10 +206,12 @@ def _check_and_install_deps(progress: LoadingProgress) -> None:
                 continue
             progress.progress.emit(pct, f"Instalowanie {pkg_name}… (dev)")
             try:
+                from binaries import subprocess_flags
                 subprocess.run(
                     [sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir", pkg_name],
                     timeout=120,
                     capture_output=True,
+                    creationflags=subprocess_flags(),
                 )
             except Exception as exc:
                 logger.warning("Auto-install %s failed: %s", pkg_name, exc)

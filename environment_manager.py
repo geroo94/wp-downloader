@@ -17,9 +17,7 @@ from typing import Any
 
 @lru_cache(maxsize=32)
 def _run_version(cmd: tuple[str, ...], timeout: float = 5.0) -> str:
-    creationflags = 0
-    if sys.platform == "win32":
-        creationflags = 0x08000000  # CREATE_NO_WINDOW
+    from binaries import subprocess_flags
 
     try:
         r = subprocess.run(
@@ -28,7 +26,7 @@ def _run_version(cmd: tuple[str, ...], timeout: float = 5.0) -> str:
             text=True,
             timeout=timeout,
             check=False,
-            creationflags=creationflags
+            creationflags=subprocess_flags(),
         )
         stdout = (r.stdout or "").strip()
         if not stdout:

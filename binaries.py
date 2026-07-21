@@ -28,6 +28,18 @@ def _exe_name(name: str) -> str:
     return name + (".exe" if sys.platform == "win32" else "")
 
 
+# CREATE_NO_WINDOW (0x08000000) — bez niej KAŻDE uruchomienie bundlowanej
+# binarki (ffmpeg/ffprobe/render/transkrypcja) na Windows migało czarnym
+# oknem konsoli. Trzymamy raw hex zamiast subprocess.CREATE_NO_WINDOW, bo
+# ten atrybut w ogóle nie istnieje w module subprocess na macOS/Linux —
+# odwołanie się do niego wywaliłoby import na dev maszynie.
+def subprocess_flags() -> int:
+    """`creationflags` do subprocess.Popen/run/create_subprocess_exec.
+    0 na macOS/Linux — creationflags != 0 na nie-Windows podnosi ValueError
+    w subprocess.Popen, więc 0 (no-op) jest jedyną bezpieczną wartością tam."""
+    return 0x08000000 if sys.platform == "win32" else 0
+
+
 def bin_dirs() -> list[str]:
     """Kandydujące lokalizacje wewnętrznego katalogu `bin/`.
 

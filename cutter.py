@@ -25,7 +25,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-from binaries import get_ffmpeg, get_ffprobe
+from binaries import get_ffmpeg, get_ffprobe, subprocess_flags
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +219,7 @@ class CutterManager:
                 binary, "-hide_banner", kind_flag,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                creationflags=subprocess_flags(),
             )
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
             ok = re.search(rf"\s{re.escape(name)}\s",
@@ -316,6 +317,7 @@ class CutterManager:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                creationflags=subprocess_flags(),
             )
             out, _ = await proc.communicate()
             if proc.returncode != 0:
@@ -413,9 +415,13 @@ class CutterManager:
         co daje stabilny timebase dla filter_complex i concat.
 
         force_sw: bundlowana statyczna binarka może nie mieć enkodera HW
-        platformy — wtedy render idzie na libx264."""
+        platformy ALBO enkoder GPU zawiódł w runtime (np. nvenc zwraca
+        "-40 Function not implemented", gdy sterowniki/GPU nie wspierają
+        enkodowania mimo że -encoders go wypisuje) — w obu przypadkach render
+        idzie na niezawodnym CPU: libx264 -preset medium (patrz start(),
+        które dorzuca ten wariant jako automatyczny fallback w cmds)."""
         if force_sw:
-            codec, codec_args = "libx264", ["-preset", "veryfast", "-crf", "23"]
+            codec, codec_args = "libx264", ["-preset", "medium", "-crf", "23"]
         else:
             codec, codec_args = _hw_encoder()
         logo = self._resolve_logo(job)
@@ -427,6 +433,17 @@ class CutterManager:
         main_w, main_h = int(meta["w"]), int(meta["h"])
         fps = float(meta["fps"])
         fps_s = f"{fps:.6g}"
+
+        # Suwaki logo/tekstu źródła są kalibrowane w px względem referencyjnego
+        # kadru 1920x1080. Skalowanie osobno po X (main_w/1920) i osobno po Y
+        # (main_h/1080) daje SPÓJNY współczynnik tylko dla wideo 16:9 — przy
+        # innej proporcji (zwłaszcza pionowej, np. 1080x1920) oba współczynniki
+        # rozjeżdżają się nawet 3x (0.56 vs 1.78), więc marginesy/fontsize
+        # wychodzą poza kadr albo kolidują z krawędzią. Jeden współczynnik
+        # liczony z KRÓTSZEGO boku (ograniczający wymiar w każdej orientacji,
+        # zgodnie z min(W,H)) eliminuje ten rozjazd i jest identyczny jak
+        # dotychczas dla dowolnego wideo 16:9 (min(1920,1080)/1080 == 1.0).
+        ref_scale = min(main_w, main_h) / 1080.0
 
         # ── Timing warstwy Outro (compositing, nie doklejanie) ──────────
         # Formuła: outro_start = dur - od + delay. Delay=0 → CAŁE outro
@@ -535,8 +552,8 @@ class CutterManager:
                 s = min(1.0, max(0.05, float(job.logo_scale or 1.0)))
                 lw = max(64, round(main_w * s))
                 lh = max(36, round(main_h * s))
-                dmx = max(0, round(max(0, int(job.logo_x)) * main_w / 1920))
-                dmy = max(0, round(max(0, int(job.logo_y)) * main_h / 1080))
+                dmx = max(0, round(max(0, int(job.logo_x)) * ref_scale))
+                dmy = max(0, round(max(0, int(job.logo_y)) * ref_scale))
                 fg.append(f"[{logo_idx}:v]scale={lw}:{lh}:"
                           f"force_original_aspect_ratio=decrease[lg]")
                 fg.append(f"{base_v}[lg]overlay=W-w-{dmx}:{dmy}:format=auto[v1]")
@@ -545,7 +562,7 @@ class CutterManager:
                 # + marginesy X/Y od wybranego rogu.
                 scale = min(0.40, max(0.05, float(job.logo_scale or 0.16)))
                 logo_w = max(32, round(main_w * scale))
-                pos = self._pos_overlay(job.logo_pos, job.logo_x, job.logo_y)
+                pos = self._pos_overlay(job.logo_pos, job.logo_x * ref_scale, job.logo_y * ref_scale)
                 fg.append(f"[{logo_idx}:v]scale={logo_w}:-1[lg]")
                 fg.append(f"{base_v}[lg]overlay={pos}:format=auto[v1]")
             base_v = "[v1]"
@@ -562,10 +579,11 @@ class CutterManager:
             safe_full = clean.replace(":", r"\:").replace("%", r"\%")
             fontfile = _filter_path_escape(_font_path(job.src_font))
             size_px = min(96, max(12, int(job.src_size or 28)))
-            fontsize = max(12, round(size_px * main_h / 1080))
-            # Marginesy z suwaków Pozycja X/Y źródła (px @1920x1080 → kadr)
-            mx = max(0, round(max(0, int(job.src_x)) * main_w / 1920))
-            my = max(0, round(max(0, int(job.src_y)) * main_h / 1080))
+            fontsize = max(12, round(size_px * ref_scale))
+            # Marginesy z suwaków Pozycja X/Y źródła (px @1920x1080, przez
+            # ref_scale — patrz komentarz przy jego wyliczeniu wyżej)
+            mx = max(0, round(max(0, int(job.src_x)) * ref_scale))
+            my = max(0, round(max(0, int(job.src_y)) * ref_scale))
             pos_xy = {
                 "tl": f"x={mx}:y={my}",
                 "tr": f"x=w-tw-{mx}:y={my}",
@@ -793,6 +811,16 @@ class CutterManager:
                 o_start = max(0.0, total_dur - od + ov)
                 total_dur += max(0.0, (o_start + od) - total_dur)
             cmds = [self._cmd_branded(job, meta, outro_meta, sub_meta, force_sw)]
+            if not force_sw:
+                # Enkoder GPU (nvenc/videotoolbox) bywa WYPISANY przez
+                # `ffmpeg -encoders` jako dostępny, ale zawodzi dopiero w
+                # runtime (np. nvenc → exit code -40 "Function not
+                # implemented", gdy sterowniki/GPU faktycznie nie wspierają
+                # enkodowania). `_run()` niżej próbuje kolejne cmd z listy aż
+                # któreś zwróci 0 — dorzucamy identyczny render wymuszony na
+                # libx264 jako automatyczny fallback, ten sam mechanizm co
+                # istniejący copy→reencode dla trybu supersonicznego.
+                cmds.append(self._cmd_branded(job, meta, outro_meta, sub_meta, force_sw=True))
             mode = "branded"
         else:
             # Copy first; pełny re-encode jako fallback (kontener/keyframe fail).
@@ -827,8 +855,10 @@ class CutterManager:
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
-            # Windows: CREATE_NEW_PROCESS_GROUP — pozwala send_signal(CTRL_BREAK_EVENT)
-            creationflags=0x00000200 if sys.platform == "win32" else 0,
+            # Windows: CREATE_NEW_PROCESS_GROUP (pozwala send_signal(CTRL_BREAK_EVENT))
+            # OR'owane z CREATE_NO_WINDOW (subprocess_flags) — bez tego drugiego
+            # render migał czarnym oknem konsoli ffmpeg co każde uruchomienie.
+            creationflags=(0x00000200 | subprocess_flags()) if sys.platform == "win32" else 0,
         )
         job.proc = proc
         assert proc.stderr
@@ -861,8 +891,9 @@ class CutterManager:
             rc = -1
             for i, cmd in enumerate(cmds):
                 if i > 0:
-                    logger.info("cutter[%s] fallback #%d: %s",
-                                job.request_id[:8], i, " ".join(cmd))
+                    logger.warning("cutter[%s] poprzednia próba nie powiodła się (exit=%d) — "
+                                   "fallback #%d: %s",
+                                   job.request_id[:8], rc, i, " ".join(cmd))
                     job.progress = 0
                     job.speed = ""
                     await self._emit(job, progress=0.0, speed_str="")

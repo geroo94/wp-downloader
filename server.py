@@ -31,7 +31,7 @@ import sys
 import os
 
 from assets_manager import add_custom_asset, list_custom_assets
-from binaries import get_ffmpeg, get_ffprobe
+from binaries import get_ffmpeg, get_ffprobe, subprocess_flags
 from cutter import CutterJob, CutterManager
 from download_manager import DownloadManager
 from environment_manager import collect_system_info
@@ -149,7 +149,7 @@ async def perform_system_update(manager: DownloadManager, delay: int = 5,
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                creationflags=0x08000000 if os.name == 'nt' else 0
+                creationflags=subprocess_flags(),
             )
             try:
                 while True:
@@ -279,6 +279,21 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
     loop = asyncio.get_event_loop()
     try:
         import whisper
+
+        # Windows: whisper.audio.load_audio() (wołane wewnątrz model.transcribe())
+        # odpala WŁASNE `ffmpeg` przez subprocess.run() bez creationflags —
+        # to migające okno CMD widoczne podczas transkrypcji, niezależnie od
+        # naszych własnych wywołań ffmpeg. Kod biblioteki nie jest nasz, więc
+        # podmieniamy `run` w jej namespace (ten sam wzorzec co monkey-patch
+        # tqdm niżej) — idempotentne przez znacznik na funkcji.
+        if sys.platform == "win32" and not getattr(whisper.audio.run, "_wp_patched", False):
+            _orig_audio_run = whisper.audio.run
+
+            def _silent_audio_run(*_args, **_kwargs):
+                _kwargs.setdefault("creationflags", subprocess_flags())
+                return _orig_audio_run(*_args, **_kwargs)
+            _silent_audio_run._wp_patched = True
+            whisper.audio.run = _silent_audio_run
 
         def _transcribe() -> str:
             # Frozen bundle (PyInstaller) czasem nie widzi systemowego magazynu
@@ -789,6 +804,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 ffmpeg_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
+                creationflags=subprocess_flags(),
             )
         except FileNotFoundError:
             return JSONResponse({"error": "ffmpeg brak w PATH"}, status_code=500)
@@ -1151,10 +1167,16 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 if sys.platform == "darwin":
                     cmd = ["open", target_dir]
                 elif sys.platform == "win32":
-                    cmd = ["explorer", os.path.normpath(target_dir)]
+                    # Sam folder (bez selekcji pliku) — os.startfile() jest
+                    # natywnym Windows API (ShellExecute), bez pośredniego
+                    # subprocess/explorer.exe: szybsze i odporne na przyszłe
+                    # zmiany w sposobie wywoływania explorer.exe z argv.
+                    os.startfile(os.path.normpath(target_dir))  # type: ignore[attr-defined]
+                    cmd = None
                 else:
                     cmd = ["xdg-open", target_dir]
-            subprocess.Popen(cmd)
+            if cmd is not None:
+                subprocess.Popen(cmd)
             logger.info("reveal: cmd=%r exists=%s fallback=%s", cmd, file_exists, fallback)
             return JSONResponse({"ok": True, "fallback": "directory_only" if fallback else None})
         except Exception as e:
@@ -1237,6 +1259,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=subprocess_flags(),
             )
             out, err = await proc.communicate()
             if proc.returncode != 0:
@@ -1277,6 +1300,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=subprocess_flags(),
             )
             out, err = await proc.communicate()
             if proc.returncode != 0 or not out:
@@ -1459,6 +1483,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                creationflags=subprocess_flags(),
             )
         except FileNotFoundError:
             return JSONResponse({"error": "ffmpeg brak w PATH"}, status_code=500)

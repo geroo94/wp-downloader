@@ -18,7 +18,7 @@ from typing import Any
 from yt_dlp import YoutubeDL
 import yt_dlp.utils
 
-from binaries import get_ffmpeg, get_ffprobe, get_ffmpeg_location
+from binaries import get_ffmpeg, get_ffprobe, get_ffmpeg_location, subprocess_flags
 from download_manager import DownloadManager, DownloadTask
 
 logger = logging.getLogger(__name__)
@@ -409,6 +409,7 @@ class YtDlpWorker:
                 ffprobe, "-v", "error", "-select_streams", "v:0",
                 "-show_entries", "stream=codec_name", "-of", "csv=p=0", output_path,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                creationflags=subprocess_flags(),
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
             codec = stdout.decode(errors="replace").strip().lower()
@@ -432,6 +433,7 @@ class YtDlpWorker:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                creationflags=subprocess_flags(),
             )
             _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=1800)
             if proc.returncode == 0 and os.path.exists(temp_out):
@@ -649,6 +651,7 @@ class YtDlpWorker:
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=subprocess_flags(),
             )
             _, stderr_data = await asyncio.wait_for(proc.communicate(), timeout=600)
             success = proc.returncode == 0
@@ -823,7 +826,9 @@ class YtDlpWorker:
         logger.info(f"FFmpeg TS→MP4: {' '.join(cmd)}")
         # CREATE_NEW_PROCESS_GROUP na Windows — bez tego send_signal(CTRL_BREAK_EVENT)
         # z graceful_stop() by trafił w cały nasz proces Python zamiast tylko w ffmpeg.
-        creationflags = 0x00000200 if sys.platform == "win32" else 0
+        # OR'owane z CREATE_NO_WINDOW (subprocess_flags) — bez tego migało czarne
+        # okno konsoli ffmpeg przy każdym remux TS→MP4.
+        creationflags = (0x00000200 | subprocess_flags()) if sys.platform == "win32" else 0
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
