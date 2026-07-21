@@ -28,3 +28,17 @@ DOKUMENTACJA.pdf
 *.spec
 # Zero-dependency: bundlowane binarki (ffmpeg/ffprobe/yt-dlp/deno) — pobierane przez build_local.sh
 bin/
+
+# Model Whisper base.pt (145 MB) przekracza twardy limit GitHuba (100 MB/plik) —
+# zostaje tylko w lokalnym builderze (assets/models/whisper/), nie w historii Git.
+# tiny.pt (75 MB) jest bundlowany, zostaje śledzony.
+assets/models/whisper/base.pt
+
+# Node.js (animejs, eksploracyjne, niepowiązane z aplikacją Python/PyQt6)
+node_modules/
+package.json
+package-lock.json
+
+# Konfiguracje edytora / narzędzi lokalnych
+.claude/
+.vscode/

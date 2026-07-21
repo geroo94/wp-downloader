@@ -304,11 +304,15 @@
       border-radius: 12px;
       padding: 20px;
       margin-bottom: 14px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.04);
+      /* Delikatny, szeroki halo-cień pod boksami roboczymi — subtelna głębia
+         nad watermarkiem WP w tle (zamiast usuniętego spotlight/GlowCard). */
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.04),
+                  0 0 50px rgba(15,23,42,0.06);
       transition: box-shadow 0.2s ease;
     }
     [data-theme="dark"] .card {
-      box-shadow: 0 1px 4px rgba(0,0,0,0.25), 0 4px 20px rgba(0,0,0,0.2);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.25), 0 4px 20px rgba(0,0,0,0.2),
+                  0 0 50px rgba(0,0,0,0.5);
     }
 
     /* ── Download form ───────────────────────────────── */
@@ -463,6 +467,14 @@
       will-change: --beam-angle;
     }
     @keyframes beam-rotate { to { --beam-angle: 360deg; } }
+    /* Aktywnie wybrany proces (klik → ładuje się do playera Live Streamy):
+       beam zmienia kolor z czerwonego na niebieski i zwalnia 2x (3.2s→6.4s)
+       — spokojny, "monitorujący" stan zamiast alarmowego czerwonego pulsu. */
+    .task.downloading.task-live-active::before {
+      background: conic-gradient(from var(--beam-angle),
+        transparent 0% 72%, #3b82f6 88%, transparent 100%);
+      animation-duration: 6.4s;
+    }
 
     .task-thumb {
       width: 48px;
@@ -777,6 +789,11 @@
       animation: splash-slide 1.2s cubic-bezier(.4,0,.6,1) infinite;
     }
     @keyframes splash-slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+    /* Health-check startowy przekazuje realny % przez QWebChannel — wtedy
+       wyłączamy indeterminate slide i pokazujemy prawdziwą szerokość paska. */
+    .splash-bar-inner.determinate {
+      animation: none; margin-left: 0; transition: width .25s ease-out;
+    }
     .splash-status {
       font-size: 11px; color: var(--text-3); font-weight: 500; letter-spacing: .02em;
     }
@@ -812,6 +829,19 @@
     /* ── Fast Cutter ────────────────────────────────────────────────── */
     .cutter-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; }
     @media (max-width: 900px) { .cutter-grid { grid-template-columns: 1fr; } }
+    /* Fast Cutter: kolumna wideo poszerzona (~ col-span-8/12) — opcje
+       brandingu żyją teraz w zwiniętym akordeonie, więc prawa kolumna
+       może być węższa bez ścieśniania formularzy. */
+    .cutter-grid-wide { grid-template-columns: 2.3fr 1fr; }
+    @media (max-width: 1100px) { .cutter-grid-wide { grid-template-columns: 1fr; } }
+    /* Transkrypcja: poziomy bar Język/Model nad strefą Drag&Drop. */
+    .transcribe-bar {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+      margin-bottom: 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border);
+    }
+    @media (max-width: 700px) { .transcribe-bar { grid-template-columns: 1fr; gap: 14px; } }
+    .transcribe-bar-col { display: flex; flex-direction: column; gap: 8px; }
+    .transcribe-bar-col .cutter-select { width: 100%; }
     .cutter-left, .cutter-right { display: flex; flex-direction: column; gap: 14px; }
     .cutter-dropzone {
       border: 2px dashed var(--border); border-radius: 12px;
@@ -832,7 +862,7 @@
       border-radius: 10px;
       overflow: hidden;
     }
-    #cutter-video {
+    #cutter-video, #live-preview-video {
       width: 100%; height: 100%;
       object-fit: contain; display: block; background: #000;
     }
@@ -909,6 +939,190 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .cutter-tc-reset { flex-shrink: 0; font-size: 12px; }
+    /* Procesy: mieści optycznie ~10 kart, dalsze przez pionowy scroll —
+       zapobiega rozrastaniu się listy w nieskończoność w dół okna. */
+    .task-list-scroll { max-height: 620px; overflow-y: auto; overflow-x: hidden; }
+    /* Datownik na kafelku (obok nazwy zadania): mała, półprzezroczysta
+       czcionka — nie konkuruje z parametrami pobierania (MB/s, fragi). */
+    .task-ts {
+      font-size: 10.5px; font-weight: 500; color: var(--text-3);
+      opacity: .78; margin-left: 8px; white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    /* ── Player layout (21dev): kontrolki jako warstwy NA playerze ────── */
+    .player-container { position: relative; }
+    .controls-overlay-container {
+      position: absolute; inset: 0; z-index: 2;
+      pointer-events: none; overflow: hidden;
+    }
+    .controls-container {
+      position: absolute; inset: 0; z-index: 3;
+      display: flex; flex-direction: column; justify-content: flex-start;
+      pointer-events: none;
+    }
+    .controls-container[hidden] { display: none; }
+    .controls-top-container {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px;
+      background: linear-gradient(to bottom, rgba(0,0,0,.55), transparent);
+      pointer-events: auto;
+    }
+    .controls-top-container[hidden] { display: none; }
+    /* Dolny pasek zawsze przyklejony do dołu playera — margin-top:auto
+       zamiast justify-content:space-between (space-between z ukrytym
+       górnym paskiem wypychało kontrolki na GÓRĘ playera — zgłoszony bug). */
+    .controls-bottom-container { margin-top: auto; }
+    /* Przyciski tekstowe w overlayu: ghost (bez białych pigułek na wideo) */
+    .controls-container .btn-about-link {
+      background: transparent; border-color: transparent;
+      color: rgba(255,255,255,.85);
+    }
+    .controls-container .btn-about-link:hover {
+      background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.25);
+      color: #fff;
+    }
+    .controls-bottom-container {
+      display: flex; flex-direction: column; gap: 2px;
+      padding: 6px 14px 10px;
+      background: linear-gradient(to top, rgba(0,0,0,.62), transparent);
+      pointer-events: auto;
+    }
+    .player-title {
+      flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: #fff;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      text-shadow: 0 1px 3px rgba(0,0,0,.6);
+    }
+    .player-top-action { color: #fff !important; font-size: 12px; flex-shrink: 0; }
+    .live-top-badge {
+      display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+      font-size: 10.5px; font-weight: 700; letter-spacing: .06em; color: #fff;
+      background: rgba(227,0,15,.88); padding: 3px 9px; border-radius: 99px;
+    }
+    /* Transport w overlayu: jasne kontrolki na ciemnym gradiencie */
+    .controls-bottom-container .cutter-ctrl-btn {
+      color: #fff; background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.22);
+    }
+    .controls-bottom-container .cutter-ctrl-btn:hover {
+      background: rgba(255,255,255,.24); border-color: rgba(255,255,255,.45);
+    }
+    .controls-bottom-container .cutter-tc-time { color: rgba(255,255,255,.88); }
+    .controls-bottom-container .cutter-tc-time .sep { color: rgba(255,255,255,.45); }
+    .controls-bottom-container .cutter-file-name { color: rgba(255,255,255,.6); }
+    .controls-bottom-container .btn-about-link { color: #fff; }
+    .controls-bottom-container .cutter-slider {
+      margin: 4px 0;
+      background: linear-gradient(to right,
+        var(--red) var(--fill, 0%), rgba(255,255,255,.28) var(--fill, 0%));
+    }
+    .controls-bottom-container .live-timeline-wrap { margin: 4px 0; }
+    .controls-bottom-container .live-timeline-buffered { background: rgba(59,130,246,.35); }
+    .controls-bottom-container .live-volume-slider { background: rgba(255,255,255,.32); }
+    /* ── Nakładki DOM presetów w podglądzie Fast Cuttera ────────────────
+       Logo/tekst źródła renderowane jako warstwy HTML zamiast wypalania
+       w strumieniu WebM — zero ryzyka podwójnego nałożenia po renderze. */
+    @font-face {
+      font-family: 'Gilroy';
+      src: url('/static/branding/fonts/Gilroy-SemiBold.ttf') format('truetype');
+      font-weight: 400 700; font-display: swap;
+    }
+    .cutter-ov-logo { position: absolute; object-fit: contain; }
+    .cutter-ov-src {
+      position: absolute; color: #fff; font-weight: 600; line-height: 1.25;
+      text-shadow: 2px 2px 0 rgba(0,0,0,.85); white-space: pre-wrap;
+      max-width: 90%;
+    }
+    /* Gigantyczne logo WP w TLE za boksami aplikacji (watermark).
+       fixed + z-index 0 = warstwa strukturalna pod całym UI; pointer-events
+       none, żeby nie łapało kliknięć. 280px = 5x bazowego rozmiaru (56px).
+       Powolne sinusoidalne pulsowanie poświaty; body.no-animations zatrzymuje
+       puls (animation:none), zostaje statyczny drop-shadow z reguły bazowej. */
+    .wp-bg-logo {
+      position: fixed; inset: 0; z-index: 0;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+    .wp-bg-logo-img {
+      width: 280px; height: 280px; object-fit: contain; opacity: .12;
+      filter: drop-shadow(0 0 30px rgba(227,0,15,.5)) drop-shadow(0 0 70px rgba(227,0,15,.28));
+      animation: wp-bg-pulse 5s ease-in-out infinite;
+    }
+    @keyframes wp-bg-pulse {
+      0%, 100% { filter: drop-shadow(0 0 30px rgba(227,0,15,.5)) drop-shadow(0 0 70px rgba(227,0,15,.28)); }
+      50% { filter: drop-shadow(0 0 55px rgba(227,0,15,.85)) drop-shadow(0 0 110px rgba(227,0,15,.45)); }
+    }
+    /* Główna treść PONAD warstwą watermarku — bez tego fixed logo z późn.
+       pozycji w DOM zasłaniałoby boksy (a ma przebijać spod nich). */
+    .header, .tabs-nav, main { position: relative; z-index: 10; }
+    /* Globalny wyłącznik animacji (Ustawienia → Działanie). Zatrzymuje CSS
+       animation/transition wszędzie — beam na kartach, poświata logo WP,
+       akordeony (JS w toggleAcc też sprawdza tę klasę i pomija anime.js). */
+    body.no-animations *, body.no-animations *::before, body.no-animations *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+    /* Live Streamy — akordeon startu nagrania: domyślnie zwinięty, żeby nie
+       zabierać miejsca playerowi (zgłoszony bug rozjeżdżającego się layoutu). */
+    #acc-live-url { margin-bottom: 18px; }
+    #acc-live-url .acc-inner { padding-top: 14px; }
+    /* Player + DVR jednokolumnowe, wyśrodkowane — sztywny max-width chroni
+       przed rozjeżdżaniem się na szerokich oknach (zgłoszony bug UX). */
+    .live-player-col {
+      display: flex; flex-direction: column; gap: 14px;
+      max-width: 720px; margin: 0 auto; width: 100%;
+    }
+    .live-cut-btn-wide { width: 100%; justify-content: center; margin-top: 8px; }
+    .live-preview-placeholder {
+      text-align: center; margin-top: 14px; font-size: 12.5px; color: var(--text-3);
+      max-width: 260px;
+    }
+    /* Logo WP z pulsującą poświatą — środek playera gdy pusty, znika
+       natychmiast po załadowaniu pierwszej klatki wideo (JS: onloadeddata). */
+    .live-idle-logo {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      pointer-events: none; transition: opacity .25s ease;
+    }
+    .live-idle-logo-img {
+      /* 5x+ względem bazowych 44px ikon UI — duży neon w pustym playerze */
+      width: 240px; height: 240px; object-fit: contain; opacity: .92;
+      filter: drop-shadow(0 0 22px rgba(227,0,15,.5)) drop-shadow(0 0 48px rgba(227,0,15,.28));
+      animation: live-logo-pulse 2.6s ease-in-out infinite;
+    }
+    @keyframes live-logo-pulse {
+      0%, 100% { filter: drop-shadow(0 0 14px rgba(227,0,15,.45)) drop-shadow(0 0 28px rgba(227,0,15,.25)); transform: scale(1); }
+      50% { filter: drop-shadow(0 0 22px rgba(227,0,15,.7)) drop-shadow(0 0 42px rgba(227,0,15,.4)); transform: scale(1.04); }
+    }
+    /* Oś czasu dwuwarstwowa: jasny pasek w tle = całość zbuforowana na
+       dysku (0→max, zawsze pełna szerokość — patrz komentarz w HTML),
+       slider na wierzchu maluje czerwony fill do aktualnej pozycji playhead. */
+    .live-timeline-wrap { position: relative; margin: 12px 0 4px; }
+    .live-timeline-wrap .cutter-slider {
+      margin: 0; position: relative; z-index: 1;
+      background: linear-gradient(to right, var(--red) var(--fill, 0%), transparent var(--fill, 0%));
+    }
+    .live-timeline-buffered {
+      position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
+      height: 6px; border-radius: 3px; background: rgba(59,130,246,.16);
+    }
+    .live-timeline-buffered.active { animation: live-buffer-pulse 2s ease-in-out infinite; }
+    @keyframes live-buffer-pulse {
+      0%, 100% { background: rgba(59,130,246,.14); }
+      50% { background: rgba(59,130,246,.26); }
+    }
+    .live-volume-slider {
+      width: 70px; height: 4px; -webkit-appearance: none; appearance: none;
+      border-radius: 2px; background: var(--surf-track); outline: none;
+      cursor: pointer; accent-color: var(--red); flex-shrink: 0;
+    }
+    /* Historia — kafelek transmisji live jest teraz klikalny (wybiera
+       źródło podglądu w Live Streamy); aktywnie wybrany dostaje niebieską
+       obwódkę + poświatę, żeby user jednoznacznie widział który stream ogląda. */
+    .task-live-selectable { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+    .task-live-selectable:hover { border-color: #60a5fa; }
+    .task-live-active {
+      border: 2px solid #3b82f6 !important;
+      box-shadow: 0 0 12px rgba(59,130,246,0.6);
+    }
     .cutter-marks {
       display: flex;
       flex-direction: column;
@@ -1199,38 +1413,159 @@
 
   <div id="streams" class="tab-content">
     <div class="card">
-      <div class="section-label">Nagrywanie Strumieni (Live)</div>
-      <div class="url-row">
-        <input type="text" id="stream-url-input" placeholder="Link do transmisji na żywo...">
-        <button class="btn-secondary" onclick="fetchStreamFormats()">Sprawdź formaty</button>
-      </div>
-      <div class="opts-row">
-        <select id="stream-fmt-select">
-          <optgroup label="— Formaty wewnętrzne —">
-            <option value="best">Najlepsza jakość (auto)</option>
-            <option value="best-mp4">Najlepsze Audio + Video · MP4</option>
-          </optgroup>
-        </select>
-        <button class="btn-primary" id="stream-dl-btn" onclick="startDownload(true)">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-            <circle cx="5" cy="5" r="5"/>
-          </svg>
-          Nagrywaj
-        </button>
-      </div>
-      <div class="wait-row">
-        <label for="wait-toggle-cb" class="wait-label">
-          Czekaj na rozpoczęcie streamu
-          <span class="wait-hint">— włącz, jeśli wrzucasz link do transmisji która jeszcze nie wystartowała</span>
-        </label>
-        <label class="toggle-wait" id="wait-toggle" title="Czekaj aż transmisja ruszy">
-          <input type="checkbox" id="wait-toggle-cb" hidden>
-          <span class="t-track">
-            <span class="t-x" aria-hidden="true">✕</span>
-            <span class="t-check" aria-hidden="true">✓</span>
-            <span class="t-thumb"></span>
+      <div class="section-label">Live Streamy</div>
+
+      <!-- Akordeon startu NOWEGO nagrania — domyślnie zwinięty, żeby nie
+           zabierać miejsca gdy user tylko ogląda/wycina. Wybór KTÓRY z już
+           trwających streamów ląduje w playerze niżej dzieje się przez
+           kliknięcie kafelka w zakładce Procesy (niebieska poświata =
+           aktywnie wybrany). -->
+      <div class="acc" id="acc-live-url">
+        <button type="button" class="acc-head" onclick="toggleAcc(this)">
+          <span class="section-label" style="margin-bottom:0">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="margin-right:6px;vertical-align:-1px">
+              <path d="M6 2v8M2 6h8"/>
+            </svg>Dodaj nowy strumień LIVE
           </span>
-        </label>
+          <svg class="acc-chev" width="12" height="12" viewBox="0 0 12 12" fill="none"
+               stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 4.5L6 8l3.5-3.5"/>
+          </svg>
+        </button>
+        <div class="acc-body"><div class="acc-inner">
+          <div class="url-row">
+            <input type="text" id="stream-url-input" placeholder="Link do transmisji na żywo...">
+            <button class="btn-secondary" onclick="fetchStreamFormats()">Sprawdź formaty</button>
+          </div>
+          <div class="opts-row">
+            <select id="stream-fmt-select">
+              <optgroup label="— Formaty wewnętrzne —">
+                <option value="best">Najlepsza jakość (auto)</option>
+                <option value="best-mp4">Najlepsze Audio + Video · MP4</option>
+              </optgroup>
+            </select>
+            <button class="btn-primary" id="stream-dl-btn" onclick="startDownload(true)">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                <circle cx="5" cy="5" r="5"/>
+              </svg>
+              Nagrywaj
+            </button>
+          </div>
+          <div class="wait-row">
+            <label for="wait-toggle-cb" class="wait-label">
+              Czekaj na rozpoczęcie streamu
+              <span class="wait-hint">— włącz, jeśli wrzucasz link do transmisji która jeszcze nie wystartowała</span>
+            </label>
+            <label class="toggle-wait" id="wait-toggle" title="Czekaj aż transmisja ruszy">
+              <input type="checkbox" id="wait-toggle-cb" hidden>
+              <span class="t-track">
+                <span class="t-x" aria-hidden="true">✕</span>
+                <span class="t-check" aria-hidden="true">✓</span>
+                <span class="t-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div></div>
+      </div>
+
+      <!-- Player + DVR/timeshift + wycinanie — jednokolumnowe, wyśrodkowane.
+           Źródło ustawia livePreviewLoad(url), wołane z kafelka w Procesach. -->
+      <div class="live-player-col">
+        <!-- Warstwowy player (struktura 21dev): PlayerContainer z wideo,
+             ControlsContainer z górnym paskiem (tytuł transmisji + status
+             LIVE) i dolnym (dwuwarstwowa oś czasu DVR + transport z Play/
+             Pause, mute, suwakiem głośności) NA playerze. Jasny pasek w tle
+             osi = bufor fizycznie zapisany na dysku od sekundy 0; czerwony
+             fill = playhead. Suwak = seek wstecz; "Aktualny live" wraca na
+             żywy koniec bufora. -->
+        <div class="player-container cutter-video-wrap">
+          <video id="live-preview-video" preload="auto" playsinline muted></video>
+          <div id="live-preview-loader" class="cutter-video-loader" hidden></div>
+          <!-- Logo WP z poświatą — widoczne tylko gdy player jest pusty,
+               znika natychmiast po załadowaniu pierwszej klatki wideo. -->
+          <div id="live-idle-logo" class="live-idle-logo">
+            <img src="/static/wp_logo.png" alt="WP" class="live-idle-logo-img">
+            <div class="live-preview-placeholder">Wybierz transmisję w zakładce Procesy, aby zobaczyć podgląd</div>
+          </div>
+          <div class="controls-container" id="live-controls" hidden>
+            <div class="controls-top-container" id="live-controls-top">
+              <span id="live-player-title" class="player-title"></span>
+              <span id="live-player-badge" class="live-top-badge"><span class="lrp-dot"></span>LIVE</span>
+            </div>
+            <div class="controls-bottom-container">
+              <div class="live-timeline-wrap">
+                <div class="live-timeline-buffered" id="live-timeline-buffered"></div>
+                <input id="live-preview-slider" class="cutter-slider" type="range"
+                       min="0" max="1" step="0.1" value="0" aria-label="Oś czasu DVR">
+              </div>
+              <div class="cutter-transport">
+                <button type="button" id="live-preview-play-btn" class="cutter-ctrl-btn" onclick="livePreviewTogglePlay()"
+                        title="Odtwórz / pauza" aria-label="Odtwórz / pauza">
+                  <svg id="live-ico-play" width="15" height="15" viewBox="0 0 15 15" fill="currentColor">
+                    <path d="M4 2.2v10.6c0 .6.65.97 1.17.66l8.3-5.3a.78.78 0 0 0 0-1.32l-8.3-5.3A.78.78 0 0 0 4 2.2z"/>
+                  </svg>
+                  <svg id="live-ico-pause" width="15" height="15" viewBox="0 0 15 15" fill="currentColor" style="display:none">
+                    <rect x="3" y="2" width="3.4" height="11" rx="1"/>
+                    <rect x="8.6" y="2" width="3.4" height="11" rx="1"/>
+                  </svg>
+                </button>
+                <button type="button" id="live-preview-mute-btn" class="cutter-ctrl-btn" onclick="livePreviewToggleMute()"
+                        title="Wycisz / włącz dźwięk" aria-label="Wycisz / włącz dźwięk">
+                  <svg id="live-ico-vol" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M7.5 2.5 4.5 5H2v5h2.5l3 2.5z" fill="currentColor" stroke="none"/>
+                    <path d="M10 5.5a3 3 0 0 1 0 4M11.8 3.8a5.4 5.4 0 0 1 0 7.4"/>
+                  </svg>
+                  <svg id="live-ico-muted" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                    <path d="M7.5 2.5 4.5 5H2v5h2.5l3 2.5z" fill="currentColor" stroke="none"/>
+                    <path d="M10 5.5l4 4M14 5.5l-4 4"/>
+                  </svg>
+                </button>
+                <input id="live-volume-slider" class="live-volume-slider" type="range"
+                       min="0" max="100" step="1" value="100" aria-label="Głośność">
+                <span class="cutter-tc-time">
+                  <span id="live-tc-current">00:00:00</span>
+                  <span class="sep">/</span>
+                  <span id="live-tc-total">00:00:00</span>
+                </span>
+                <button type="button" id="live-goto-live-btn" class="btn-about-link cutter-tc-reset"
+                        onclick="livePreviewGotoLive()" title="Wróć do aktualnego momentu transmisji">
+                  <span id="live-goto-live-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);margin-right:5px;vertical-align:middle"></span>Aktualny live
+                </button>
+                <span id="live-preview-status" class="cutter-file-name"></span>
+                <button type="button" class="btn-about-link cutter-tc-reset" onclick="livePreviewStop()">Zatrzymaj podgląd</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Wycinanie prosto z bufora DVR: te same pola/przycisk co Fast
+             Cutter, operują na zakresie już nagranego pliku bufora. -->
+        <div class="cutter-marks">
+          <div class="cutter-marks-inputs">
+            <label class="cutter-mark-field">
+              <span class="cutter-mark-lbl">Start</span>
+              <input id="live-mark-start" type="text" placeholder="00:00:00" maxlength="8" aria-label="Czas startu">
+            </label>
+            <label class="cutter-mark-field">
+              <span class="cutter-mark-lbl">Koniec</span>
+              <input id="live-mark-end" type="text" placeholder="00:00:00" maxlength="8" aria-label="Czas końca">
+            </label>
+          </div>
+          <div class="cutter-marks-buttons">
+            <button type="button" class="btn-primary" onclick="liveSetMark('start')">
+              <span class="mark-arrow">[[</span> Ustaw jako START
+            </button>
+            <button type="button" class="btn-primary" onclick="liveSetMark('end')">
+              Ustaw jako KONIEC <span class="mark-arrow">]]</span>
+            </button>
+          </div>
+        </div>
+        <button type="button" id="live-cut-btn" class="btn-primary live-cut-btn-wide" onclick="liveCutFromBuffer()" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+            <line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>
+          </svg>
+          WYTNIJ MATERIAŁ
+        </button>
       </div>
     </div>
   </div>
@@ -1239,8 +1574,10 @@
   <div id="cutter" class="tab-content">
     <div class="card">
       <div class="section-label">Fast Cutter</div>
-      <div class="cutter-grid">
-        <!-- LEWA: dropzone / player + timeline marks -->
+      <div class="cutter-grid cutter-grid-wide">
+        <!-- LEWA: dropzone / player + timeline marks — poszerzona kolumna
+             (patrz .cutter-grid-wide) żeby podgląd montowanego materiału
+             był duży i czytelny. -->
         <div class="cutter-left">
           <div id="cutter-dropzone" class="cutter-dropzone">
             <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -1251,44 +1588,58 @@
             <input type="file" id="cutter-file-input" accept="video/*" style="display:none">
           </div>
           <div id="cutter-player-wrap" style="display:none">
-            <!-- Natywne kontrolki <video> wyłączone celowo: strumień transkodowany
-                 w locie (WebM pipe) nie ma indeksu klatek, więc natywny seek bar
-                 nie działa. Cały transport obsługuje customowa oś czasu niżej. -->
-            <div class="cutter-video-wrap">
+            <!-- Warstwowy player (struktura 21dev): PlayerContainer z wideo,
+                 ControlsOverlayContainer na nakładki DOM presetów (logo,
+                 źródło, badge SUB/OUTRO — podgląd bez wypalania w strumieniu)
+                 oraz ControlsContainer z górnym (nazwa pliku) i dolnym
+                 (oś czasu + transport) paskiem NA playerze.
+                 Natywne kontrolki <video> wyłączone celowo: strumień WebM
+                 pipe nie ma indeksu klatek, natywny seek bar nie działa. -->
+            <div class="player-container cutter-video-wrap">
               <video id="cutter-video" preload="auto" playsinline></video>
               <div id="cutter-video-loader" class="cutter-video-loader" hidden></div>
-            </div>
-            <input id="cutter-slider" class="cutter-slider" type="range"
-                   min="0" max="100" step="0.1" value="0" aria-label="Oś czasu">
-            <div class="cutter-transport">
-              <button type="button" id="cutter-play-btn" class="cutter-ctrl-btn" onclick="cutterTogglePlay()"
-                      title="Odtwórz / pauza (spacja)" aria-label="Odtwórz / pauza">
-                <svg id="cutter-ico-play" width="15" height="15" viewBox="0 0 15 15" fill="currentColor">
-                  <path d="M4 2.2v10.6c0 .6.65.97 1.17.66l8.3-5.3a.78.78 0 0 0 0-1.32l-8.3-5.3A.78.78 0 0 0 4 2.2z"/>
-                </svg>
-                <svg id="cutter-ico-pause" width="15" height="15" viewBox="0 0 15 15" fill="currentColor" style="display:none">
-                  <rect x="3" y="2" width="3.4" height="11" rx="1"/>
-                  <rect x="8.6" y="2" width="3.4" height="11" rx="1"/>
-                </svg>
-              </button>
-              <button type="button" id="cutter-mute-btn" class="cutter-ctrl-btn" onclick="cutterToggleMute()"
-                      title="Wycisz / włącz dźwięk" aria-label="Wycisz / włącz dźwięk">
-                <svg id="cutter-ico-vol" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M7.5 2.5 4.5 5H2v5h2.5l3 2.5z" fill="currentColor" stroke="none"/>
-                  <path d="M10 5.5a3 3 0 0 1 0 4M11.8 3.8a5.4 5.4 0 0 1 0 7.4"/>
-                </svg>
-                <svg id="cutter-ico-muted" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-                  <path d="M7.5 2.5 4.5 5H2v5h2.5l3 2.5z" fill="currentColor" stroke="none"/>
-                  <path d="M10 5.5l4 4M14 5.5l-4 4"/>
-                </svg>
-              </button>
-              <span class="cutter-tc-time">
-                <span id="tc-current">00:00:00</span>
-                <span class="sep">/</span>
-                <span id="tc-total">00:00:00</span>
-              </span>
-              <span id="cutter-file-name" class="cutter-file-name" title=""></span>
-              <button type="button" class="btn-about-link cutter-tc-reset" onclick="cutterReset()">Zmień plik</button>
+              <div id="cutter-overlay-layers" class="controls-overlay-container" aria-hidden="true">
+                <img id="cutter-ov-logo" class="cutter-ov-logo" src="" alt="" hidden>
+                <div id="cutter-ov-src" class="cutter-ov-src" hidden></div>
+              </div>
+              <div class="controls-container">
+                <div class="controls-top-container">
+                  <span id="cutter-file-name" class="player-title" title=""></span>
+                  <button type="button" class="btn-about-link player-top-action" onclick="cutterReset()">Zmień plik</button>
+                </div>
+                <div class="controls-bottom-container">
+                  <input id="cutter-slider" class="cutter-slider" type="range"
+                         min="0" max="100" step="0.1" value="0" aria-label="Oś czasu">
+                  <div class="cutter-transport">
+                    <button type="button" id="cutter-play-btn" class="cutter-ctrl-btn" onclick="cutterTogglePlay()"
+                            title="Odtwórz / pauza (spacja)" aria-label="Odtwórz / pauza">
+                      <svg id="cutter-ico-play" width="15" height="15" viewBox="0 0 15 15" fill="currentColor">
+                        <path d="M4 2.2v10.6c0 .6.65.97 1.17.66l8.3-5.3a.78.78 0 0 0 0-1.32l-8.3-5.3A.78.78 0 0 0 4 2.2z"/>
+                      </svg>
+                      <svg id="cutter-ico-pause" width="15" height="15" viewBox="0 0 15 15" fill="currentColor" style="display:none">
+                        <rect x="3" y="2" width="3.4" height="11" rx="1"/>
+                        <rect x="8.6" y="2" width="3.4" height="11" rx="1"/>
+                      </svg>
+                    </button>
+                    <button type="button" id="cutter-mute-btn" class="cutter-ctrl-btn" onclick="cutterToggleMute()"
+                            title="Wycisz / włącz dźwięk" aria-label="Wycisz / włącz dźwięk">
+                      <svg id="cutter-ico-vol" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M7.5 2.5 4.5 5H2v5h2.5l3 2.5z" fill="currentColor" stroke="none"/>
+                        <path d="M10 5.5a3 3 0 0 1 0 4M11.8 3.8a5.4 5.4 0 0 1 0 7.4"/>
+                      </svg>
+                      <svg id="cutter-ico-muted" width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                        <path d="M7.5 2.5 4.5 5H2v5h2.5l3 2.5z" fill="currentColor" stroke="none"/>
+                        <path d="M10 5.5l4 4M14 5.5l-4 4"/>
+                      </svg>
+                    </button>
+                    <span class="cutter-tc-time">
+                      <span id="tc-current">00:00:00</span>
+                      <span class="sep">/</span>
+                      <span id="tc-total">00:00:00</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="cutter-marks">
               <div class="cutter-marks-inputs">
@@ -1322,9 +1673,20 @@
             </div>
           </div>
         </div>
-        <!-- PRAWA: branding -->
+        <!-- PRAWA: branding — każda sekcja (Logo / SUB / Źródło / Outro /
+             Audio) w OSOBNYM akordeonie, domyślnie zwinięte. User otwiera
+             tylko to, przy czym aktualnie pracuje. -->
         <div class="cutter-right">
-          <div class="section-label" style="margin-top:0">Branding</div>
+
+          <div class="acc" id="acc-cutter-logo">
+            <button type="button" class="acc-head" onclick="toggleAcc(this)">
+              <span class="section-label" style="margin-bottom:0">Logo</span>
+              <svg class="acc-chev" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                   stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2.5 4.5L6 8l3.5-3.5"/>
+              </svg>
+            </button>
+            <div class="acc-body"><div class="acc-inner">
           <div class="setting-row">
             <div class="setting-meta">
               <div class="setting-name">Logo</div>
@@ -1347,7 +1709,6 @@
               <option value="bl">Lewy dolny</option>
             </select>
           </div>
-
           <!-- Suwaki brandingu — zmiany odświeżają podgląd playera (debounce),
                wartości wstrzykiwane do filter_complex podglądu i renderu. -->
           <div class="brand-slider-row">
@@ -1374,16 +1735,18 @@
             <input id="logo-y" class="brand-slider" type="range" min="0" max="300" step="2" value="20"
                    aria-label="Margines pionowy logo">
           </div>
-
-          <div class="brand-slider-row">
-            <div class="brand-slider-head">
-              <span class="brand-slider-lbl">Głośność audio <span class="brand-slider-hint">mixer materiału</span></span>
-              <span class="brand-slider-val" id="cutter-volume-val">100%</span>
-            </div>
-            <input id="cutter-volume" class="brand-slider" type="range" min="0" max="200" step="5" value="100"
-                   aria-label="Głośność audio materiału (0–200%)">
+            </div></div>
           </div>
 
+          <div class="acc" id="acc-cutter-sub">
+            <button type="button" class="acc-head" onclick="toggleAcc(this)">
+              <span class="section-label" style="margin-bottom:0">Animacja subskrypcji (SUB)</span>
+              <svg class="acc-chev" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                   stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2.5 4.5L6 8l3.5-3.5"/>
+              </svg>
+            </button>
+            <div class="acc-body"><div class="acc-inner">
           <div class="setting-row">
             <div class="setting-meta">
               <div class="setting-name">Dodaj animację subskrypcji</div>
@@ -1399,15 +1762,41 @@
               <div class="setting-name">Plik animacji SUB</div>
               <div class="setting-desc" id="cutter-sub-custom-desc">Domyślny (bundlowany sub_button.mov)</div>
             </div>
-            <button type="button" class="btn-secondary" id="cutter-sub-custom-btn">Wybierz wideo…</button>
+            <select id="cutter-sub-file-src" class="cutter-select">
+              <option value="default" selected>Standardowa</option>
+              <option value="custom">Wybierz wideo…</option>
+              <option value="add">+ Dodaj nowe wideo…</option>
+            </select>
+          </div>
+            </div></div>
           </div>
 
+          <div class="acc" id="acc-cutter-src">
+            <button type="button" class="acc-head" onclick="toggleAcc(this)">
+              <span class="section-label" style="margin-bottom:0">Źródło (napis)</span>
+              <svg class="acc-chev" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                   stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2.5 4.5L6 8l3.5-3.5"/>
+              </svg>
+            </button>
+            <div class="acc-body"><div class="acc-inner">
           <div class="setting-row">
             <div class="setting-meta">
               <div class="setting-name">Źródło (tekst)</div>
               <div class="setting-desc">Napis pisany efektem maszyny (Gilroy) na początku klipu.</div>
             </div>
             <input id="cutter-src-text" class="cutter-input" type="text" placeholder="np. Źródło: Sejm RP" maxlength="80">
+          </div>
+          <div class="setting-row">
+            <div class="setting-meta">
+              <div class="setting-name">Wybór czcionki</div>
+              <div class="setting-desc">Czcionka napisu źródła — w podglądzie i finalnym renderze.</div>
+            </div>
+            <select id="cutter-src-font" class="cutter-select">
+              <option value="gilroy" selected>Gilroy (domyślna)</option>
+              <option value="arial">Arial</option>
+              <option value="opensans">Open Sans</option>
+            </select>
           </div>
           <div class="brand-slider-row">
             <div class="brand-slider-head">
@@ -1444,24 +1833,63 @@
               <option value="br">Prawy dolny róg</option>
             </select>
           </div>
+            </div></div>
+          </div>
+
+          <div class="acc" id="acc-cutter-outro">
+            <button type="button" class="acc-head" onclick="toggleAcc(this)">
+              <span class="section-label" style="margin-bottom:0">Outro (tyłówka)</span>
+              <svg class="acc-chev" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                   stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2.5 4.5L6 8l3.5-3.5"/>
+              </svg>
+            </button>
+            <div class="acc-body"><div class="acc-inner">
           <div class="setting-row">
             <div class="setting-meta">
               <div class="setting-name">Outro (tyłówka)</div>
-              <div class="setting-desc">Doklejenie wideo na końcu materiału.</div>
+              <div class="setting-desc">Warstwa nakładana na końcówkę materiału — maska alfa .mov przepuszcza obraz pod spodem.</div>
             </div>
             <select id="cutter-outro-src" class="cutter-select">
               <option value="" selected>Brak</option>
-              <option value="default">Standardowa</option>
               <option value="custom">Wybierz wideo…</option>
             </select>
           </div>
+          <div class="setting-row" id="cutter-outro-file-row" style="display:none">
+            <div class="setting-meta">
+              <div class="setting-name">Plik outro</div>
+              <div class="setting-desc" id="cutter-outro-file-desc">— nie wybrano —</div>
+            </div>
+          </div>
           <div class="brand-slider-row" id="overlap-row">
             <div class="brand-slider-head">
-              <span class="brand-slider-lbl">Czas nałożenia outro <span class="brand-slider-hint">overlap z maską alfa</span></span>
+              <span class="brand-slider-lbl">Delay <span class="brand-slider-hint">0 = całe outro na końcówce materiału, wyżej = wystaje za koniec</span></span>
               <span class="brand-slider-val" id="outro-overlap-val">0.0 s</span>
             </div>
             <input id="outro-overlap" class="brand-slider" type="range" min="0" max="3" step="0.1" value="0"
-                   aria-label="Ile sekund przed końcem nałożyć outro">
+                   aria-label="Przesunięcie startu nałożenia outro">
+          </div>
+            </div></div>
+          </div>
+
+          <div class="acc" id="acc-cutter-audio">
+            <button type="button" class="acc-head" onclick="toggleAcc(this)">
+              <span class="section-label" style="margin-bottom:0">Audio</span>
+              <svg class="acc-chev" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                   stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2.5 4.5L6 8l3.5-3.5"/>
+              </svg>
+            </button>
+            <div class="acc-body"><div class="acc-inner">
+          <div class="brand-slider-row">
+            <div class="brand-slider-head">
+              <span class="brand-slider-lbl">Głośność audio <span class="brand-slider-hint">mixer materiału</span></span>
+              <span class="brand-slider-val" id="cutter-volume-val">100%</span>
+            </div>
+            <input id="cutter-volume" class="brand-slider" type="range" min="0" max="200" step="5" value="100"
+                   aria-label="Głośność audio materiału (0–200%)">
+          </div>
+            </div></div>
           </div>
 
           <button id="cutter-render-btn" class="btn-primary" onclick="cutterRender()" style="width:100%;justify-content:center;margin-top:8px">
@@ -1482,72 +1910,70 @@
   <div id="transkrypcja" class="tab-content">
     <div class="card">
       <div class="section-label">Transkrypcja</div>
-      <div class="cutter-grid">
-        <!-- LEWA: dropzone / plik + wynik -->
-        <div class="cutter-left">
-          <div id="transcribe-dropzone" class="cutter-dropzone">
-            <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 4v16M4 12h16"/>
-            </svg>
-            <div class="dz-title">Przeciągnij plik audio/wideo lub kliknij, aby wybrać</div>
-            <div class="dz-hint">MP3, WAV, MP4, MKV i inne formaty obsługiwane przez ffmpeg</div>
-            <input type="file" id="transcribe-file-input" accept="audio/*,video/*" style="display:none">
+
+      <!-- Poziomy bar kontrolny: Język (lewo) / Model Whisper (prawo) —
+           obie kolumny widoczne od razu, bez przewijania w dół po ustawienia. -->
+      <div class="transcribe-bar">
+        <div class="transcribe-bar-col">
+          <div class="setting-meta">
+            <div class="setting-name">Język</div>
+            <div class="setting-desc">Explicit język redukuje halucynacje Whisper.</div>
           </div>
-          <div id="transcribe-file-wrap" style="display:none">
-            <div class="cutter-transport">
-              <span id="transcribe-file-name" class="cutter-file-name" title=""></span>
-              <button type="button" class="btn-about-link" onclick="transcribeReset()">Zmień plik</button>
-            </div>
-            <div id="transcribe-progress-wrap" class="progress-wrap" style="display:none; margin-top:8px">
-              <div class="progress-bar transcribing" id="transcribe-progress-bar" data-prog="0"></div>
-            </div>
-            <div id="transcribe-progress-label" class="dl-speed" style="display:none"></div>
-            <textarea id="transcribe-result" class="transcribe-textarea"
-                      placeholder="Tu pojawi się gotowa transkrypcja…" readonly></textarea>
-            <div class="transcribe-result-actions" id="transcribe-result-actions" style="display:none">
-              <button type="button" class="btn-secondary" onclick="transcribeCopyToClipboard()">Kopiuj do schowka</button>
-              <button type="button" class="btn-secondary" onclick="transcribeSaveAs('txt')">Zapisz jako .TXT</button>
-              <button type="button" class="btn-secondary" onclick="transcribeSaveAs('srt')">Zapisz jako .SRT</button>
-            </div>
-          </div>
+          <select id="transcribe-language" class="cutter-select">
+            <option value="pl" selected>Polski</option>
+            <option value="en">Angielski</option>
+            <option value="uk">Ukraiński</option>
+            <option value="de">Niemiecki</option>
+            <option value="es">Hiszpański</option>
+            <option value="fr">Francuski</option>
+            <option value="">Auto-detekcja</option>
+          </select>
         </div>
-        <!-- PRAWA: ustawienia + start -->
-        <div class="cutter-right">
-          <div class="section-label" style="margin-top:0">Ustawienia</div>
-          <div class="setting-row">
-            <div class="setting-meta">
-              <div class="setting-name">Język</div>
-              <div class="setting-desc">Explicit język redukuje halucynacje Whisper.</div>
-            </div>
-            <select id="transcribe-language" class="cutter-select">
-              <option value="pl" selected>Polski</option>
-              <option value="en">Angielski</option>
-              <option value="uk">Ukraiński</option>
-              <option value="de">Niemiecki</option>
-              <option value="es">Hiszpański</option>
-              <option value="fr">Francuski</option>
-              <option value="">Auto-detekcja</option>
-            </select>
+        <div class="transcribe-bar-col">
+          <div class="setting-meta">
+            <div class="setting-name">Model Whisper</div>
+            <div class="setting-desc">Większy model = lepsza jakość, wolniejszy i więcej RAM.</div>
           </div>
-          <div class="setting-row">
-            <div class="setting-meta">
-              <div class="setting-name">Model Whisper</div>
-              <div class="setting-desc">Większy model = lepsza jakość, wolniejszy i więcej RAM.</div>
-            </div>
-            <select id="transcribe-model" class="cutter-select">
-              <option value="tiny">Tiny (najszybszy)</option>
-              <option value="base">Base</option>
-              <option value="small" selected>Small (zalecany)</option>
-              <option value="medium">Medium</option>
-              <option value="large-v3">Large-v3 (najdokładniejszy)</option>
-            </select>
-          </div>
-          <button type="button" class="btn-primary" id="transcribe-start-btn"
-                  onclick="transcribeStart()" style="width:100%; margin-top:8px;" disabled>
-            Uruchom transkrypcję
-          </button>
+          <select id="transcribe-model" class="cutter-select">
+            <option value="tiny">Tiny (najszybszy)</option>
+            <option value="base">Base</option>
+            <option value="small" selected>Small (zalecany)</option>
+            <option value="medium">Medium</option>
+            <option value="large-v3">Large-v3 (najdokładniejszy)</option>
+          </select>
         </div>
       </div>
+
+      <!-- Strefa Drag&Drop + wynik — pełna szerokość pod paskiem ustawień. -->
+      <div id="transcribe-dropzone" class="cutter-dropzone">
+        <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 4v16M4 12h16"/>
+        </svg>
+        <div class="dz-title">Przeciągnij plik audio/wideo lub kliknij, aby wybrać</div>
+        <div class="dz-hint">MP3, WAV, MP4, MKV i inne formaty obsługiwane przez ffmpeg</div>
+        <input type="file" id="transcribe-file-input" accept="audio/*,video/*" style="display:none">
+      </div>
+      <div id="transcribe-file-wrap" style="display:none">
+        <div class="cutter-transport">
+          <span id="transcribe-file-name" class="cutter-file-name" title=""></span>
+          <button type="button" class="btn-about-link" onclick="transcribeReset()">Zmień plik</button>
+        </div>
+        <div id="transcribe-progress-wrap" class="progress-wrap" style="display:none; margin-top:8px">
+          <div class="progress-bar transcribing" id="transcribe-progress-bar" data-prog="0"></div>
+        </div>
+        <div id="transcribe-progress-label" class="dl-speed" style="display:none"></div>
+        <textarea id="transcribe-result" class="transcribe-textarea"
+                  placeholder="Tu pojawi się gotowa transkrypcja…" readonly></textarea>
+        <div class="transcribe-result-actions" id="transcribe-result-actions" style="display:none">
+          <button type="button" class="btn-secondary" onclick="transcribeCopyToClipboard()">Kopiuj do schowka</button>
+          <button type="button" class="btn-secondary" onclick="transcribeSaveAs('txt')">Zapisz jako .TXT</button>
+          <button type="button" class="btn-secondary" onclick="transcribeSaveAs('srt')">Zapisz jako .SRT</button>
+        </div>
+      </div>
+      <button type="button" class="btn-primary" id="transcribe-start-btn"
+              onclick="transcribeStart()" style="width:100%; margin-top:14px;" disabled>
+        Uruchom transkrypcję
+      </button>
     </div>
   </div>
 
@@ -1641,6 +2067,17 @@
 
       <div class="setting-row">
         <div class="setting-meta">
+          <div class="setting-name">Wyłącz animacje interfejsu</div>
+          <div class="setting-desc">Zatrzymuje przelatujące paski na kartach procesów, poświatę logo WP w playerze, rozwijanie akordeonów oraz maszynę do pisania napisu źródła.</div>
+        </div>
+        <label class="toggle-sw">
+          <input type="checkbox" id="no-anim-check" onchange="applyAnimationsSetting(this.checked)">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-meta">
           <div class="setting-name">Ciasteczka przeglądarki</div>
           <div class="setting-desc">Wymagane do pobierania z Instagrama i Facebooka. Wybierz przeglądarkę, w której masz zalogowane konto.<br>
             <span style="color:var(--text-3);font-size:11px">Jeżeli Chrome jest otwarty i blokuje plik bazy, wybierz „Plik" i wskaż wyeksportowany <code>cookies.txt</code>.</span>
@@ -1726,15 +2163,25 @@
     .checkbox-container .checkmark:after { left: 5px; top: 2px; width: 5px; height: 9px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); }
   </style>
 
-  <!-- Karta kolejki -->
+  <!-- Karta kolejki — max 10 widocznych kart; klasa .task-list-scroll
+       (max-height + overflow) nakładana z JS dopiero powyżej 10 zadań. -->
   <div class="card">
-    <div class="section-label">Historia</div>
+    <div class="section-label">Procesy</div>
     <div id="task-list">
       <div class="empty">Brak zadań — wklej link i kliknij Pobierz</div>
     </div>
   </div>
 
 </main>
+
+<!-- Gigantyczne logo WP — TŁO STRUKTURALNE aplikacji (watermark): warstwa
+     fixed wyśrodkowana na ekranie, z-index 0, fizycznie ZA boksami i kartami
+     zakładek (te dostają z-index wyżej). 5x rozmiar bazowy + delikatna
+     przezroczystość; pulsująca poświata wyłącza się razem z globalnym
+     kill-switchem animacji (body.no-animations → statyczny drop-shadow). -->
+<div class="wp-bg-logo" aria-hidden="true">
+  <img src="/static/wp_logo.png" alt="" class="wp-bg-logo-img">
+</div>
 
 <!-- Toast powiadomienie -->
 <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
@@ -1871,6 +2318,11 @@
     if (prev && prev.id === 'cutter' && id !== 'cutter') {
       window.dispatchEvent(new CustomEvent('cutter:tab-left'));
     }
+    // Podgląd Live Streamy celowo NIE jest zabijany przy zmianie zakładki —
+    // bufor DVR i transkoder działają dalej w tle, user wraca do gotowego
+    // playera bez ponownego ładowania (zgłoszony bug UX: reset przy każdym
+    // przełączeniu). Teardown tylko przez "Zatrzymaj podgląd" albo gdy
+    // stream przestaje nagrywać (_liveCheckActiveStillRecording).
     const activeBtn = btn || document.querySelector(`.tabs-nav .tab-btn[data-tab="${id}"]`);
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     if (activeBtn) activeBtn.classList.add('active');
@@ -1902,6 +2354,12 @@
         window.wpBridge.resize_window_preset(savedSize);
         const savedTray = localStorage.getItem('wp-tray') === '1';
         window.wpBridge.set_minimize_to_tray(savedTray);
+        // Health-check startowy (app_controller._check_and_install_deps) —
+        // Qt emituje (percent, status_text) na każdym kamieniu milowym,
+        // podmieniamy indeterminate-slide na realny, rosnący pasek.
+        if (window.wpBridge.loadingProgress && typeof window.wpBridge.loadingProgress.connect === 'function') {
+          window.wpBridge.loadingProgress.connect(_updateSplashProgress);
+        }
       });
     }
     tick();
@@ -2019,14 +2477,14 @@
         // Dźwięki powiadomień
         if (data.status === 'done' && prevStatus !== 'done') playSound('done');
         else if (data.status === 'error' && prevStatus !== 'error') playSound('error');
-        // Fast Cutter: po udanym renderze wyciętego materiału auto-załaduj
-        // wynikowy plik do playera — natychmiastowy podgląd efektu (branding,
-        // outro, sub) bez ręcznego wskazywania pliku. Tylko dla renderu
-        // zainicjowanego z TEJ sesji cuttera (pendingRenderTaskId dopasowany).
-        if (data.job_type === 'render' && data.status === 'done' && prevStatus !== 'done'
-            && data.output_path && data.task_id === cutterState.pendingRenderTaskId) {
+        // Fast Cutter: po renderze player CELOWO NIE ładuje wygenerowanego
+        // .mp4 — zostaje na oryginalnym źródle (zgłoszony bug podwójnego
+        // renderowania: wypalone warstwy + nakładki podglądu dublowały się
+        // na ekranie). Wynik jest dostępny z karty w Procesach (ikona ✂/📁).
+        if (data.job_type === 'render' && data.status === 'done'
+            && data.task_id === cutterState.pendingRenderTaskId) {
           cutterState.pendingRenderTaskId = '';
-          cutterLoadFile(data.output_path, data.output_path.split(/[\\/]/).pop());
+          showToast('Render gotowy — plik na karcie w Procesach');
         }
         if (data.transcription && data.transcription !== 'in_progress' && data.transcription !== 'error'
             && prevTranscription === 'in_progress') {
@@ -2231,7 +2689,8 @@
           output_path: output_path,
           live_record,
           status: 'queue',
-          progress: 0
+          progress: 0,
+          created_at: Date.now() / 1000
         };
         renderTasks();
         urlInput.value = '';
@@ -2361,10 +2820,20 @@
     }
   }
 
+  /** Datownik na kafelku Procesów: epoch s → "12.07.2026 00:34". */
+  function _fmtTaskTs(epoch) {
+    if (!epoch) return '';
+    const d = new Date(epoch * 1000);
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
   /** Buduje pełny HTML karty (wywoływany TYLKO przy pierwszym pokazaniu
       zadania lub zmianie struktury — nie na każdy tick %). */
   function _buildTaskCard(t) {
     const rid = escHtml(t.task_id);
+    const tsHtml = t.created_at
+      ? `<span class="task-ts">${_fmtTaskTs(t.created_at)}</span>` : '';
 
     // ── Fast Cutter render — karta ujednolicona z kartą pobrania ──────
     // Układ ikon: [Folder] [Nożyczki] [Whisper] [Usuń] — bez duplikacji,
@@ -2399,7 +2868,7 @@
         <div class="task task-render ${t.status}" data-id="${rid}">
           <div class="task-thumb task-thumb-render">${_SCISSORS_18}</div>
           <div class="task-info">
-            <div class="task-title">${rTitle}</div>
+            <div class="task-title">${rTitle}${tsHtml}</div>
             <div class="task-meta" style="color:${rStatusColor}"><span class="render-static">${rStatusLabel}</span><span class="render-dyn">${rDyn}</span></div>
             ${rProgress}
           </div>
@@ -2481,11 +2950,14 @@
       ? ''
       : `<span class="badge ${t.status}">${_STATUS_LABEL[t.status] || t.status}</span>`;
 
+    const liveUrlAttr = isLiveRec ? ` data-live-url="${escHtml(t.url)}"` : '';
+    const liveSelectableClass = isLiveRec ? ' task-live-selectable' : '';
     return `
-    <div class="task ${t.status}"${animStyle} data-id="${rid}">
+    <div class="task ${t.status}${liveSelectableClass}"${animStyle} data-id="${rid}"${liveUrlAttr}
+         ${isLiveRec ? 'title="Kliknij, aby podejrzeć na żywo w zakładce Live Streamy"' : ''}>
       <div class="task-thumb">${thumbHtml}</div>
       <div class="task-info">
-        <div class="task-title">${escHtml(t.title || t.url)}</div>
+        <div class="task-title">${escHtml(t.title || t.url)}${tsHtml}</div>
         <div class="task-meta">${escHtml(t.format_id || '')}${t.output_path ? ' · ' + escHtml(t.output_path) : ''}${t.live_record ? ' · Live Stream' : ''}</div>
         ${progressHtml}
       </div>
@@ -2501,11 +2973,17 @@
   // DOM. Karta o niezmienionej strukturze dostaje tylko patch dynamicznych
   // wartości; przebudowa następuje wyłącznie przy zmianie struktury.
   function renderTasks() {
+    _liveCheckActiveStillRecording();
     const list = document.getElementById('task-list');
     // transcribe_standalone = plik z dysku transkrybowany z zakładki
     // Transkrypcja — żyje tylko w `tasks{}` dla WS lookup, nie pokazuje się
-    // w Historii (ma własny pasek postępu wewnątrz swojej zakładki).
+    // w Procesach (ma własny pasek postępu wewnątrz swojej zakładki).
     const taskArr = Object.values(tasks).filter(t => t.job_type !== 'transcribe_standalone');
+
+    // Scroll w Procesach dopiero powyżej 10 kart — klasa z max-height
+    // nakładana warunkowo, żeby scrollbar nie pojawiał się przy krótkiej
+    // liście (zgłoszony bug: pasek widoczny nawet przy jednym zadaniu).
+    list.classList.toggle('task-list-scroll', taskArr.length > 10);
 
     if (taskArr.length === 0) {
       list.innerHTML = `<div class="empty">
@@ -2574,6 +3052,7 @@
       });
     }
     // Klik obsługuje jeden delegowany listener na #task-list (initTaskListDelegation).
+    _liveSyncHistoryHighlight();
   }
 
   // Delegated click handler — attached ONCE so buttons keep responding during frequent DOM rebuilds.
@@ -2583,7 +3062,18 @@
     list.dataset.delegated = '1';
     list.addEventListener('click', async (ev) => {
       const btn = ev.target.closest('button[data-act]');
-      if (!btn || !list.contains(btn)) return;
+      if (!btn) {
+        // Klik na sam kafelek transmisji live (nie na przycisk akcji) →
+        // załaduj jako aktywne źródło podglądu w Live Streamy + przełącz zakładkę.
+        const tile = ev.target.closest('.task[data-live-url]');
+        if (tile && list.contains(tile)) {
+          const tabBtn = document.querySelector('.tabs-nav .tab-btn[data-tab="streams"]');
+          if (tabBtn) tabBtn.click();
+          livePreviewLoad(tile.dataset.liveUrl);
+        }
+        return;
+      }
+      if (!list.contains(btn)) return;
       const id = btn.getAttribute('data-id');
       const act = btn.getAttribute('data-act');
       try {
@@ -2667,7 +3157,8 @@
                   output_path,
                   live_record: t.live_record,
                   status: 'queue',
-                  progress: 0
+                  progress: 0,
+                  created_at: Date.now() / 1000
                 };
                 renderTasks();
                 showToast('Duplikat dodany do kolejki!');
@@ -2872,6 +3363,15 @@
 
   function applySoundsSetting(enabled) {
     localStorage.setItem('wp-sounds', enabled ? '1' : '0');
+  }
+
+  /** Globalny kill-switch animacji (beam na kartach Procesów, poświata logo
+      WP, rozwijanie akordeonów, maszyna do pisania napisu źródła w Fast
+      Cutterze — patrz .no-animations w CSS i sprawdzenia w toggleAcc/
+      cutterRender/_cutterBrandQS). Klasa na <body> działa natychmiast. */
+  function applyAnimationsSetting(disabled) {
+    localStorage.setItem('wp-no-anim', disabled ? '1' : '0');
+    document.body.classList.toggle('no-animations', disabled);
   }
 
   function _beep(ctx, freq, startDelay, duration, type = 'sine') {
@@ -3243,6 +3743,11 @@
     const savedSounds = localStorage.getItem('wp-sounds') === '1';
     const sc = document.getElementById('sounds-check');
     if (sc) sc.checked = savedSounds;
+    // Animacje interfejsu (domyślnie WŁĄCZONE — checkbox odznaczony = wyłącz)
+    const savedNoAnim = localStorage.getItem('wp-no-anim') === '1';
+    const nac = document.getElementById('no-anim-check');
+    if (nac) nac.checked = savedNoAnim;
+    document.body.classList.toggle('no-animations', savedNoAnim);
   }
 
   initSettings();
@@ -3281,7 +3786,7 @@
     card.classList.toggle('open', opening);
     try { localStorage.setItem('wp-acc-' + card.id, opening ? '1' : '0'); } catch (e) {}
 
-    if (!window.anime?.animate) {
+    if (!window.anime?.animate || document.body.classList.contains('no-animations')) {
       body.style.height = opening ? 'auto' : '0px';
       return;
     }
@@ -3297,7 +3802,7 @@
   }
 
   function initAccordions() {
-    document.querySelectorAll('#settings .acc').forEach(card => {
+    document.querySelectorAll('#settings .acc, #streams .acc, #cutter .acc').forEach(card => {
       let saved = null;
       try { saved = localStorage.getItem('wp-acc-' + card.id); } catch (e) {}
       const open = saved === null ? card.classList.contains('open') : saved === '1';
@@ -3367,6 +3872,20 @@
     }, 4000);
   })();
 
+  /** Health-check startowy (ffmpeg/ffprobe/deno, yt-dlp, modele Whisper) —
+      Qt emituje realny (percent, status_text) przez QWebChannel zamiast
+      kosmetycznej animacji indeterminate. Pierwsze wywołanie przełącza
+      pasek w tryb "determinate" (realna szerokość zamiast sliding loop). */
+  function _updateSplashProgress(pct, text) {
+    const bar = document.querySelector('.splash-bar-inner');
+    const status = document.querySelector('.splash-status');
+    if (bar) {
+      bar.classList.add('determinate');
+      bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    }
+    if (status && text) status.textContent = text;
+  }
+
   // Akordeony + indicator zakładek — uruchamiamy gdy DOM gotowy.
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
@@ -3399,47 +3918,112 @@
   let _cutterSeekTimer = null;   // debounce seeków (arrow keys / szybkie zmiany)
   let _cutterBrandTimer = null;  // debounce restartu podglądu po suwakach brandingu
 
-  /** Parametry brandingu doklejane do URL strumienia podglądu: logo
-      (gdy wybrane), mixer audio (gdy ≠100%) i nakładka suba (gdy włączona).
-      Bez aktywnych opcji zwraca '' — backend streamuje bez filter_complex. */
+  /** Parametry doklejane do URL strumienia podglądu. Presety wizualne
+      (logo/tekst/sub) NIE są już wypalane w strumieniu — podgląd renderuje
+      je jako nakładki DOM (_cutterSyncOverlays), więc do backendu leci
+      wyłącznie mixer audio (jedyna rzecz niesymulowalna w DOM). */
   function _cutterBrandQS() {
     let qs = '';
-    const logoSrc = document.getElementById('cutter-logo-src').value;
-    if (logoSrc) {
-      // Suwaki aktywne dla obu wariantów: default = skala całej grafiki
-      // 1920x1080 (100% → fullframe 0:0) + odsunięcie od krawędzi,
-      // custom = ułamek szerokości + marginesy od wybranego rogu.
-      qs += '&logo_src=' + encodeURIComponent(logoSrc)
-        + '&logo_pos=' + encodeURIComponent(document.getElementById('cutter-logo-pos').value)
-        + '&logo_scale=' + (cutterState.logoScale / 100).toFixed(3)
-        + '&logo_x=' + cutterState.logoX
-        + '&logo_y=' + cutterState.logoY;
-      if (logoSrc === 'custom' && cutterState.customLogoPath) {
-        qs += '&logo_custom=' + encodeURIComponent(cutterState.customLogoPath);
-      }
-    }
     if (Math.abs(cutterState.audioVolume - 100) >= 1) {
       qs += '&vol=' + (cutterState.audioVolume / 100).toFixed(3);
-    }
-    if (cutterState.subOverlay) {
-      qs += '&sub=1';
-      if (cutterState.customSubPath) qs += '&sub_custom=' + encodeURIComponent(cutterState.customSubPath);
-    }
-    const srcTxt = (document.getElementById('cutter-src-text')?.value || '').trim();
-    if (srcTxt) {
-      qs += '&src=' + encodeURIComponent(srcTxt)
-        + '&src_size=' + Math.round(cutterState.srcSize)
-        + '&src_pos=' + encodeURIComponent(cutterState.srcPos)
-        + '&source_x=' + Math.round(cutterState.srcX)
-        + '&source_y=' + Math.round(cutterState.srcY);
     }
     return qs;
   }
 
-  /** Restart strumienia podglądu z nowymi parametrami brandingu, wznawiając
-      od bieżącej pozycji. Debounce 350 ms — ciągnięcie suwaka nie może
-      spamować backendu restartami ffmpeg. */
+  /** Prostokąt faktycznej treści wideo wewnątrz playera (object-fit:
+      contain → letterbox). Wszystkie nakładki mapują współrzędne z układu
+      referencyjnego 1920x1080 (w nim operują suwaki) na ten prostokąt. */
+  function _cutterContentRect() {
+    const v = document.getElementById('cutter-video');
+    const wrap = v.closest('.player-container');
+    if (!v || !wrap) return null;
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
+    const scale = Math.min(W / vw, H / vh);
+    const cw = vw * scale, ch = vh * scale;
+    return { left: (W - cw) / 2, top: (H - ch) / 2, width: cw, height: ch };
+  }
+
+  /** Nakładki DOM presetów w podglądzie (logo, tekst źródła, badge SUB/
+      OUTRO) — natychmiastowe, bez restartu ffmpeg i bez wypalania pikseli.
+      Ta sama matematyka pozycji co w cutter.py._cmd_branded (marginesy
+      w px @1920x1080 skalowane do prostokąta treści). */
+  function _cutterSyncOverlays() {
+    const layers = document.getElementById('cutter-overlay-layers');
+    if (!layers) return;
+    const rect = _cutterContentRect();
+    const logoEl = document.getElementById('cutter-ov-logo');
+    const srcEl = document.getElementById('cutter-ov-src');
+    if (!rect || !cutterState.filePath) {
+      logoEl.hidden = true; srcEl.hidden = true;
+      return;
+    }
+    const sx = rect.width / 1920, sy = rect.height / 1080;
+
+    // Logo: default = grafika fullframe 1920x1080 skalowana od kotwicy
+    // prawy-górny; custom = ułamek szerokości + margines od wybranego rogu.
+    const logoSrc = document.getElementById('cutter-logo-src').value;
+    if (logoSrc === 'default' || (logoSrc === 'custom' && cutterState.customLogoPath)) {
+      logoEl.src = logoSrc === 'default'
+        ? '/static/branding/default_logo.png'
+        : '/api/cutter/asset?path=' + encodeURIComponent(cutterState.customLogoPath);
+      const mx = Math.round(cutterState.logoX * sx), my = Math.round(cutterState.logoY * sy);
+      if (logoSrc === 'default') {
+        const s = Math.min(1, Math.max(0.05, cutterState.logoScale / 100));
+        logoEl.style.width = (rect.width * s) + 'px';
+        logoEl.style.height = (rect.height * s) + 'px';
+        logoEl.style.left = ''; logoEl.style.bottom = '';
+        logoEl.style.right = (rect.left + mx) + 'px';
+        logoEl.style.top = (rect.top + my) + 'px';
+      } else {
+        const s = Math.min(0.40, Math.max(0.05, cutterState.logoScale / 100));
+        logoEl.style.width = (rect.width * s) + 'px';
+        logoEl.style.height = 'auto';
+        const pos = document.getElementById('cutter-logo-pos').value || 'tr';
+        logoEl.style.left = pos.includes('l') ? (rect.left + mx) + 'px' : '';
+        logoEl.style.right = pos.includes('r') ? (rect.left + mx) + 'px' : '';
+        logoEl.style.top = pos.startsWith('t') ? (rect.top + my) + 'px' : '';
+        logoEl.style.bottom = pos.startsWith('b') ? (rect.top + my) + 'px' : '';
+      }
+      logoEl.hidden = false;
+    } else {
+      logoEl.hidden = true;
+    }
+
+    // Tekst źródła: czcionka/rozmiar/róg/marginesy 1:1 z parametrami renderu
+    // (cień 2px/2px czarny jak shadowx/shadowy w drawtext).
+    const srcTxt = (document.getElementById('cutter-src-text')?.value || '').trim();
+    if (srcTxt) {
+      const fontSel = document.getElementById('cutter-src-font')?.value || 'gilroy';
+      srcEl.style.fontFamily = fontSel === 'arial' ? 'Arial, sans-serif'
+        : fontSel === 'opensans' ? "'Open Sans', 'Segoe UI', sans-serif"
+        : "'Gilroy', 'Segoe UI', sans-serif";
+      srcEl.textContent = srcTxt;
+      srcEl.style.fontSize = Math.max(9, Math.round(cutterState.srcSize * sy)) + 'px';
+      const mx = Math.round(cutterState.srcX * sx), my = Math.round(cutterState.srcY * sy);
+      const pos = cutterState.srcPos || 'tl';
+      srcEl.style.left = pos.includes('l') ? (rect.left + mx) + 'px' : '';
+      srcEl.style.right = pos.includes('r') ? (rect.left + mx) + 'px' : '';
+      srcEl.style.top = pos.startsWith('t') ? (rect.top + my) + 'px' : '';
+      srcEl.style.bottom = pos.startsWith('b') ? (rect.top + my) + 'px' : '';
+      srcEl.style.textAlign = pos.includes('r') ? 'right' : 'left';
+      srcEl.hidden = false;
+    } else {
+      srcEl.hidden = true;
+    }
+    // SUB/OUTRO celowo bez wskaźników na wideo (usunięte badge) — stan
+    // widać w panelu opcji; pełną kompozycję pokazuje finalny render.
+  }
+
+  /** Presety wizualne: natychmiastowa aktualizacja nakładek DOM — zero
+      restartów ffmpeg przy ciąganiu suwaków logo/tekstu. */
   function _cutterRefreshPreview() {
+    _cutterSyncOverlays();
+  }
+
+  /** Restart strumienia podglądu (potrzebny TYLKO dla parametrów audio,
+      których DOM nie zasymuluje — mixer głośności). Debounce 350 ms. */
+  function _cutterRefreshStream() {
     if (!cutterState.filePath) return;
     clearTimeout(_cutterBrandTimer);
     _cutterBrandTimer = setTimeout(() => {
@@ -3450,6 +4034,19 @@
       _cutterUpdateSrc(pos);
     }, 350);
   }
+
+  // Nakładki muszą nadążać za zmianą geometrii playera (resize okna,
+  // pierwsze klatki strumienia z realnym aspect ratio) i za polami bez
+  // dedykowanych listenerów (czcionka źródła).
+  (function initCutterOverlayHooks() {
+    const v = document.getElementById('cutter-video');
+    if (v) v.addEventListener('loadedmetadata', _cutterSyncOverlays);
+    window.addEventListener('resize', () => {
+      if (cutterState.filePath) _cutterSyncOverlays();
+    });
+    document.getElementById('cutter-src-font')
+      ?.addEventListener('change', _cutterSyncOverlays);
+  })();
 
   function _cutterFmtTC(sec) {
     sec = Math.max(0, Math.floor(sec || 0));
@@ -3508,6 +4105,286 @@
     v.muted = !v.muted;
     _cutterSyncMuteIcon();
   }
+
+  // ── Live Stream Preview + DVR/Timeshift ─────────────────────────────────
+  // Backend nagrywa surowy strumień (streamlink) do rosnącego pliku bufora
+  // na dysku (/api/live/timeshift-start), niezależnie od tego czy podgląd
+  // jest akurat otwarty. Podgląd (/api/live/stream-preview?seek_seconds=X)
+  // to osobny, jednorazowy ffmpeg transkoder czytający bufor od zadanej
+  // sekundy — każdy seek/zmiana streamu zabija poprzedni transkoder.
+  const liveState = {
+    session: 'preview-' + Math.random().toString(36).slice(2),
+    activeUrl: '', bufferPath: '', startedAt: 0,
+    followLive: true, tickTimer: null, ready: false,
+  };
+
+  function _liveSyncMuteIcon() {
+    const v = document.getElementById('live-preview-video');
+    document.getElementById('live-ico-vol').style.display   = (v && v.muted) ? 'none' : '';
+    document.getElementById('live-ico-muted').style.display = (v && v.muted) ? '' : 'none';
+  }
+  function livePreviewToggleMute() {
+    const v = document.getElementById('live-preview-video');
+    v.muted = !v.muted;
+    _liveSyncMuteIcon();
+  }
+
+  function _liveSyncPlayIcon() {
+    const v = document.getElementById('live-preview-video');
+    const playing = v && !v.paused && !v.ended;
+    document.getElementById('live-ico-play').style.display  = playing ? 'none' : '';
+    document.getElementById('live-ico-pause').style.display = playing ? '' : 'none';
+  }
+  function livePreviewTogglePlay() {
+    if (!liveState.activeUrl) return;
+    const v = document.getElementById('live-preview-video');
+    if (v.paused || v.ended) _cutterTryPlay(v); else v.pause();
+    setTimeout(_liveSyncPlayIcon, 0);
+  }
+
+  (function initLiveVolumeSlider() {
+    const sl = document.getElementById('live-volume-slider');
+    const v = document.getElementById('live-preview-video');
+    if (!sl || !v) return;
+    const saved = parseFloat(localStorage.getItem('wp-live-volume'));
+    const initial = Number.isNaN(saved) ? 100 : saved;
+    sl.value = initial;
+    v.volume = initial / 100;
+    sl.addEventListener('input', () => {
+      const vol = Math.max(0, Math.min(100, parseFloat(sl.value) || 0));
+      v.volume = vol / 100;
+      if (vol > 0 && v.muted) { v.muted = false; _liveSyncMuteIcon(); }
+      try { localStorage.setItem('wp-live-volume', String(vol)); } catch (e) {}
+    });
+    v.addEventListener('play', _liveSyncPlayIcon);
+    v.addEventListener('pause', _liveSyncPlayIcon);
+  })();
+
+  /** Synchronizuje niebieski highlight (border+glow) na kafelku w Historii
+      odpowiadającym aktualnie wybranemu streamowi w playerze Live Streamy.
+      Wołane tylko przy ZMIANIE liveState.activeUrl (nie na każdy tick
+      renderTasks()) — bezpośredni toggle klasy, bez przebudowy DOM. */
+  function _liveSyncHistoryHighlight() {
+    document.querySelectorAll('#task-list .task-live-active').forEach(el => {
+      if (el.dataset.liveUrl !== liveState.activeUrl) el.classList.remove('task-live-active');
+    });
+    if (!liveState.activeUrl) return;
+    const tile = document.querySelector(
+      '#task-list .task[data-live-url="' + CSS.escape(liveState.activeUrl) + '"]');
+    if (tile) tile.classList.add('task-live-active');
+  }
+  // Jeśli stream aktywny w playerze przestał nagrywać (task zniknął/zmienił
+  // status), zatrzymaj podgląd zamiast zostawiać martwy highlight.
+  function _liveCheckActiveStillRecording() {
+    if (!liveState.activeUrl) return;
+    const stillRecording = Object.values(tasks)
+      .some(t => t.url === liveState.activeUrl && t.live_record && t.status === 'downloading');
+    if (!stillRecording) livePreviewStop();
+  }
+
+  function _liveTeardown() {
+    clearInterval(liveState.tickTimer);
+    liveState.tickTimer = null;
+    liveState.activeUrl = '';
+    liveState.bufferPath = '';
+    liveState.ready = false;
+    fetch('/api/live/timeshift-stop?session=' + encodeURIComponent(liveState.session),
+          { method: 'POST' }).catch(() => {});
+    const v = document.getElementById('live-preview-video');
+    try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
+    const loader = document.getElementById('live-preview-loader');
+    const status = document.getElementById('live-preview-status');
+    const cutBtn = document.getElementById('live-cut-btn');
+    const idleLogo = document.getElementById('live-idle-logo');
+    if (loader) loader.hidden = true;
+    if (status) status.textContent = '';
+    if (cutBtn) cutBtn.disabled = true;
+    if (idleLogo) idleLogo.style.opacity = '1';
+    const controls = document.getElementById('live-controls');
+    if (controls) controls.hidden = true;
+    document.getElementById('live-timeline-buffered')?.classList.remove('active');
+    _liveSyncHistoryHighlight();
+    const sl = document.getElementById('live-preview-slider');
+    sl.max = 1; sl.value = 0;
+    _cutterPaintSlider(sl);
+    document.getElementById('live-tc-current').textContent = _cutterFmtTC(0);
+    document.getElementById('live-tc-total').textContent = _cutterFmtTC(0);
+  }
+
+  /** Restartuje transkoder podglądu od zadanej sekundy bufora. Nie dotyka
+      wątku-nagrywarki po stronie backendu — bufor rośnie niezależnie. */
+  function _liveDoSeek(seekSeconds) {
+    const loader = document.getElementById('live-preview-loader');
+    const status = document.getElementById('live-preview-status');
+    const v = document.getElementById('live-preview-video');
+    if (loader) loader.hidden = false;
+    if (status) status.textContent = liveState.followLive ? 'Łączenie…' : 'Przewijanie…';
+    v.src = '/api/live/stream-preview?session=' + encodeURIComponent(liveState.session)
+          + '&seek_seconds=' + Math.max(0, seekSeconds).toFixed(1);
+    v.onloadeddata = () => {
+      if (loader) loader.hidden = true;
+      if (status) status.textContent = liveState.followLive ? 'Na żywo' : 'Podgląd (przewinięty)';
+      liveState.ready = true;
+      const cutBtn = document.getElementById('live-cut-btn');
+      if (cutBtn) cutBtn.disabled = false;
+      const idleLogo = document.getElementById('live-idle-logo');
+      if (idleLogo) idleLogo.style.opacity = '0';
+      document.getElementById('live-timeline-buffered')?.classList.add('active');
+      _cutterTryPlay(v);
+    };
+    v.onerror = () => {
+      if (loader) loader.hidden = true;
+      if (status) status.textContent = 'Błąd podglądu';
+    };
+  }
+
+  function _liveBufferSeconds() {
+    return Math.max(0, (Date.now() / 1000) - liveState.startedAt);
+  }
+
+  function livePreviewLoad(url) {
+    if (!url || url === liveState.activeUrl) return;
+    if (liveState.activeUrl) _liveTeardown();
+    liveState.activeUrl = url;
+    liveState.followLive = true;
+    _liveSyncHistoryHighlight();
+    const status = document.getElementById('live-preview-status');
+    if (status) status.textContent = 'Łączenie…';
+    // Kontrolki widoczne dopiero przy załadowanym streamie (idle = czysty
+    // player z logo WP); górny pasek: tytuł transmisji + badge LIVE.
+    const srcTask = Object.values(tasks).find(t => t.url === url);
+    const titleEl = document.getElementById('live-player-title');
+    if (titleEl) titleEl.textContent = (srcTask && (srcTask.title || srcTask.url)) || url;
+    const controls = document.getElementById('live-controls');
+    if (controls) controls.hidden = false;
+
+    fetch('/api/live/timeshift-start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, session: liveState.session }),
+    }).then(r => r.json()).then(d => {
+      if (d.error) { if (status) status.textContent = 'Błąd: ' + d.error; return; }
+      liveState.bufferPath = d.buffer_path;
+      liveState.startedAt = d.started_at;
+      // Start zawsze na LIVE EDGE (koniec aktualnie zapisanego bufora), NIE
+      // od sekundy 0 — bufor mógł już rosnąć od dawna (ta sama sesja+URL
+      // zwraca istniejący bufor z /api/live/timeshift-start). Pełna oś
+      // czasu wstecz do 0 zostaje dostępna przez przewinięcie suwaka.
+      // Cofka 3 s od krawędzi daje transkoderowi zapas materiału — playback
+      // nie dogania natychmiast końca pliku bufora.
+      _liveDoSeek(Math.max(0, _liveBufferSeconds() - 3.0));
+      liveState.tickTimer = setInterval(_liveDvrTick, 1000);
+      // BEZ okresowego restartu strumienia (poprzedni 8-sekundowy timer
+      // przerywał odtwarzanie w kółko — zgłoszone jako "player nie działa").
+      // Dosięg do świeżej krawędzi live następuje dopiero gdy player
+      // faktycznie wyczerpie zbuforowany materiał ('ended'/'stalled' niżej).
+    }).catch(() => { if (status) status.textContent = 'Błąd połączenia'; });
+  }
+
+  // Gdy playback wyczerpie dane (transkoder doszedł do końca rosnącego
+  // pliku bufora i zakończył strumień), a user jest w trybie "Aktualny
+  // live" — dociągnij do świeżej krawędzi. W trybie przewiniętym zostaw
+  // (user obejrzał swój fragment do końca — nie teleportujemy go na live).
+  (function initLiveAutoRefollow() {
+    const v = document.getElementById('live-preview-video');
+    if (!v) return;
+    let refollowTimer = null;
+    const refollow = () => {
+      if (!liveState.activeUrl || !liveState.followLive || !liveState.ready) return;
+      clearTimeout(refollowTimer);
+      refollowTimer = setTimeout(() => {
+        if (liveState.activeUrl && liveState.followLive) {
+          _liveDoSeek(Math.max(0, _liveBufferSeconds() - 3.0));
+        }
+      }, 700);
+    };
+    v.addEventListener('ended', refollow);
+    v.addEventListener('stalled', refollow);
+  })();
+
+  /** Co sekundę: oś czasu rośnie wraz z buforem nagrania. Gdy user
+      przewinął wstecz (followLive=false), suwak NIE skacze do końca —
+      zostaje tam gdzie user go zostawił, tylko max rośnie. */
+  function _liveDvrTick() {
+    if (!liveState.activeUrl) return;
+    const buf = _liveBufferSeconds();
+    const sl = document.getElementById('live-preview-slider');
+    sl.max = Math.max(1, buf);
+    if (liveState.followLive) sl.value = buf;
+    _cutterPaintSlider(sl);
+    document.getElementById('live-tc-total').textContent = _cutterFmtTC(buf);
+    if (liveState.followLive) {
+      document.getElementById('live-tc-current').textContent = _cutterFmtTC(buf);
+    }
+    const dot = document.getElementById('live-goto-live-dot');
+    if (dot) dot.style.background = liveState.followLive ? 'var(--red)' : 'var(--text-3)';
+  }
+
+  function livePreviewGotoLive() {
+    if (!liveState.activeUrl) return;
+    liveState.followLive = true;
+    _liveDoSeek(Math.max(0, _liveBufferSeconds() - 3.0));
+  }
+
+  function _liveOnSliderInput(e) {
+    document.getElementById('live-tc-current').textContent = _cutterFmtTC(parseFloat(e.target.value) || 0);
+    _cutterPaintSlider(e.target);
+  }
+  function _liveOnSliderChange(e) {
+    if (!liveState.activeUrl) return;
+    liveState.followLive = false;
+    _liveDoSeek(parseFloat(e.target.value) || 0);
+  }
+
+  function liveSetMark(which) {
+    const t = parseFloat(document.getElementById('live-preview-slider').value) || 0;
+    const input = document.getElementById(which === 'start' ? 'live-mark-start' : 'live-mark-end');
+    input.value = _cutterFmtTC(t);
+  }
+
+  async function liveCutFromBuffer() {
+    if (!liveState.bufferPath) { showToast('Najpierw wybierz transmisję z listy', true); return; }
+    const start = _cutterParseTC(document.getElementById('live-mark-start').value);
+    const end = _cutterParseTC(document.getElementById('live-mark-end').value);
+    if (start === null || end === null || end <= start) {
+      showToast('Podaj poprawne START i KONIEC (HH:MM:SS)', true);
+      return;
+    }
+    const suggested = 'live_cut_' + Date.now() + '.mp4';
+    const doRender = async (outPath) => {
+      const payload = {
+        input_path: liveState.bufferPath, start_ts: start, end_ts: end,
+        output_path: outPath || '',
+      };
+      const r = await fetch('/api/cutter/render', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json();
+      if (!r.ok) { showToast(d.error || 'Błąd cięcia z bufora Live', true); return; }
+      showToast('Cięcie z bufora Live wystartowało — karta w Historii');
+    };
+    if (window.wpBridge && typeof window.wpBridge.pick_save_file === 'function') {
+      window.wpBridge.pick_save_file(suggested, 'MP4 (*.mp4)', (outPath) => {
+        if (!outPath) { showToast('Anulowano zapis'); return; }
+        doRender(outPath);
+      });
+    } else {
+      doRender('');
+    }
+  }
+
+  (function initLivePreviewSlider() {
+    // Wybór KTÓRY stream ląduje w playerze dzieje się teraz przez klik
+    // kafelka w Historii (patrz initTaskListDelegation) — tu tylko slider.
+    const sl = document.getElementById('live-preview-slider');
+    if (!sl) return;
+    sl.addEventListener('input', _liveOnSliderInput);
+    sl.addEventListener('change', _liveOnSliderChange);
+    _cutterPaintSlider(sl);
+  })();
+
+  function livePreviewStop() { _liveTeardown(); }
+
 
   function _cutterUpdateSrc(startSec) {
     cutterState.streamStart = startSec;
@@ -3743,16 +4620,17 @@
     const gpu = navigator.platform.includes('Mac') ? 'videotoolbox' : 'nvenc/x264';
     let txt = 'Z brandingiem — tryb Ekspresowy (GPU h264_' + gpu + ')';
     if (cutterState.subOverlay) txt += ' · SUB na starcie i przed tyłówką';
-    if (outro && cutterState.outroOverlap > 0) {
-      txt += ' · outro nałożone ' + cutterState.outroOverlap.toFixed(1) + ' s przed końcem';
+    if (outro) {
+      txt += ' · outro jako warstwa (delay ' + cutterState.outroOverlap.toFixed(1) + ' s)';
     }
     modeHint.textContent = txt;
   }
 
-  // Custom logo / outro pickers przez Qt file dialog
+  // Custom logo + outro pickery przez Qt file dialog. Outro uproszczone do
+  // dwóch stanów (Brak / Wybierz wideo…) — wybrana ścieżka persystowana
+  // w localStorage i przywracana przy starcie.
   (function initCutterCustomPickers() {
     const logoSel = document.getElementById('cutter-logo-src');
-    const outroSel = document.getElementById('cutter-outro-src');
     if (logoSel) logoSel.addEventListener('change', async e => {
       if (e.target.value !== 'custom') return;
       if (window.wpBridge?.pick_open_file) {
@@ -3761,14 +4639,52 @@
         else e.target.value = 'default';  // anulował → wróć do default
       }
     });
-    if (outroSel) outroSel.addEventListener('change', async e => {
-      if (e.target.value !== 'custom') return;
-      if (window.wpBridge?.pick_open_file) {
-        const p = await window.wpBridge.pick_open_file('', 'Wideo z alfą lub bez (*.mp4 *.mkv *.mov *.webm)');
-        if (p) cutterState.customOutroPath = p;
-        else e.target.value = '';
+
+    const outroSel = document.getElementById('cutter-outro-src');
+    const outroFileRow = document.getElementById('cutter-outro-file-row');
+    const outroFileDesc = document.getElementById('cutter-outro-file-desc');
+    function _syncOutroFileRow() {
+      const on = outroSel.value === 'custom' && cutterState.customOutroPath;
+      if (outroFileRow) outroFileRow.style.display = on ? '' : 'none';
+      if (outroFileDesc) {
+        outroFileDesc.textContent = cutterState.customOutroPath
+          ? cutterState.customOutroPath.split(/[\\/]/).pop()
+          : '— nie wybrano —';
       }
-    });
+    }
+    if (outroSel) {
+      // Przywrócenie zapisanego wyboru z poprzedniej sesji
+      const savedPath = localStorage.getItem('wp-cutter-outro-path') || '';
+      if (savedPath) {
+        outroSel.value = 'custom';
+        cutterState.customOutroPath = savedPath;
+      }
+      _syncOutroFileRow();
+      outroSel.addEventListener('change', async e => {
+        if (e.target.value !== 'custom') {
+          cutterState.customOutroPath = '';
+          try { localStorage.removeItem('wp-cutter-outro-path'); } catch (err) {}
+          _syncOutroFileRow();
+          refreshCutterHint();
+          _cutterSyncOverlays();
+          return;
+        }
+        if (window.wpBridge?.pick_open_file) {
+          const p = await window.wpBridge.pick_open_file(
+            '', 'Wideo z alfą lub bez (*.mov *.mp4 *.mkv *.webm);;Wszystkie pliki (*)');
+          if (p) {
+            cutterState.customOutroPath = p;
+            try { localStorage.setItem('wp-cutter-outro-path', p); } catch (err) {}
+          } else {
+            e.target.value = '';
+            cutterState.customOutroPath = '';
+          }
+          _syncOutroFileRow();
+          refreshCutterHint();
+          _cutterSyncOverlays();
+        }
+      });
+    }
   })();
 
   // Suwaki brandingu: badge z wartością, persist w localStorage i debounce
@@ -3792,11 +4708,12 @@
       // tego nie pokazał, a restart ffmpeg kosztuje.
       { id: 'outro-overlap', key: 'wp-cutter-overlap',    state: 'outroOverlap',
         fmt: v => v.toFixed(1) + ' s',  refresh: false },
-      // Mixer: podgląd gra z docelową głośnością (restart strumienia).
+      // Mixer: jedyny parametr wymagający restartu strumienia (audio nie
+      // da się zasymulować nakładką DOM) — stream: true.
       { id: 'cutter-volume', key: 'wp-cutter-volume',     state: 'audioVolume',
-        fmt: v => Math.round(v) + '%',  refresh: true },
-      // Źródło: rozmiar + marginesy X/Y — podgląd renderuje napis na żywo,
-      // więc każda zmiana restartuje strumień (z debouncem).
+        fmt: v => Math.round(v) + '%',  refresh: true, stream: true },
+      // Źródło: rozmiar + marginesy X/Y — nakładka DOM aktualizowana
+      // natychmiast, zero restartów ffmpeg.
       { id: 'src-size',      key: 'wp-cutter-src-size',   state: 'srcSize',
         fmt: v => Math.round(v) + ' px', refresh: true },
       { id: 'src-x',         key: 'wp-cutter-src-x',      state: 'srcX',
@@ -3822,6 +4739,7 @@
       el.addEventListener('input', () => {
         apply(true);
         if (d.refresh) _cutterRefreshPreview();
+        if (d.stream) _cutterRefreshStream();
         if (d.id === 'outro-overlap') refreshCutterHint();
       });
     });
@@ -3879,11 +4797,17 @@
     document.getElementById('cutter-logo-src')?.addEventListener('change', syncLogoControls);
     syncLogoControls();
 
-    // Checkbox animacji subskrypcji: persist + live podgląd + hint trybu
+    // Toggle animacji subskrypcji (klasyczny przycisk = Brak/włączona)
+    // + dropdown ŹRÓDŁA pliku: Standardowa (bundlowana) / Wybierz wideo…
+    // (jednorazowe, bez kopiowania) / + Dodaj nowe wideo… (kopiuje do
+    // custom_assets przez /api/assets/custom i trwale dopisuje jako kolejną
+    // pozycję — persystencja w config.json po stronie backendu, reset tylko
+    // przez "Wyczyść pamięć podręczną" w Ustawieniach).
     const subCb = document.getElementById('cutter-sub-check');
     const subCustomRow = document.getElementById('cutter-sub-custom-row');
-    const subCustomBtn = document.getElementById('cutter-sub-custom-btn');
+    const subFileSel = document.getElementById('cutter-sub-file-src');
     const subCustomDesc = document.getElementById('cutter-sub-custom-desc');
+    const _subAssetPaths = {};
     function _syncSubCustomRow() {
       if (subCustomRow) subCustomRow.style.display = (subCb && subCb.checked) ? '' : 'none';
       if (subCustomDesc) {
@@ -3904,18 +4828,90 @@
         refreshCutterHint();
       });
     }
-    if (subCustomBtn) subCustomBtn.addEventListener('click', async () => {
-      if (!window.wpBridge?.pick_open_file) return;
-      const p = await window.wpBridge.pick_open_file(
-        '', 'Wideo z alfą (*.mov *.mp4 *.mkv *.webm);;Wszystkie pliki (*)');
-      if (p) {
-        cutterState.customSubPath = p;
-        try { localStorage.setItem('wp-cutter-sub-path', p); } catch (e) {}
+    if (subFileSel) {
+      // Persisted pozycje z bazy zasobów + przywrócenie ostatniego wyboru
+      (async () => {
+        try {
+          const r = await fetch('/api/assets/custom?kind=sub');
+          const d = await r.json();
+          (d.items || []).forEach(it => {
+            _subAssetPaths[it.id] = it.path;
+            const opt = document.createElement('option');
+            opt.value = 'saved:' + it.id;
+            opt.textContent = it.name;
+            subFileSel.appendChild(opt);
+          });
+        } catch (e) { /* brak listy nie blokuje UI */ }
+        const savedSel = localStorage.getItem('wp-cutter-sub-file-src') || 'default';
+        if ([...subFileSel.options].some(o => o.value === savedSel)) {
+          subFileSel.value = savedSel;
+          if (savedSel.indexOf('saved:') === 0) {
+            cutterState.customSubPath = _subAssetPaths[savedSel.slice(6)] || '';
+          } else if (savedSel === 'default') {
+            cutterState.customSubPath = '';
+          }
+          // 'custom' (jednorazowy): ścieżka przywrócona wyżej z localStorage
+        }
+        _syncSubCustomRow();
+      })();
+      subFileSel.addEventListener('change', async (e) => {
+        const v = e.target.value;
+        const persistSel = (val) => {
+          try { localStorage.setItem('wp-cutter-sub-file-src', val); } catch (err) {}
+        };
+        if (v === 'default') {
+          cutterState.customSubPath = '';
+          try { localStorage.removeItem('wp-cutter-sub-path'); } catch (err) {}
+          persistSel('default');
+        } else if (v === 'custom') {
+          if (!window.wpBridge?.pick_open_file) return;
+          const p = await window.wpBridge.pick_open_file(
+            '', 'Wideo z alfą (*.mov *.mp4 *.mkv *.webm);;Wszystkie pliki (*)');
+          if (p) {
+            cutterState.customSubPath = p;
+            try { localStorage.setItem('wp-cutter-sub-path', p); } catch (err) {}
+            persistSel('custom');
+          } else {
+            subFileSel.value = 'default';
+            cutterState.customSubPath = '';
+            persistSel('default');
+          }
+        } else if (v === 'add') {
+          if (!window.wpBridge?.pick_open_file) return;
+          const p = await window.wpBridge.pick_open_file(
+            '', 'Wideo z alfą (*.mov *.mp4 *.mkv *.webm);;Wszystkie pliki (*)');
+          if (!p) { subFileSel.value = 'default'; cutterState.customSubPath = ''; persistSel('default'); }
+          else {
+            try {
+              const r = await fetch('/api/assets/custom', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ kind: 'sub', source_path: p }),
+              });
+              const d = await r.json();
+              if (!r.ok) { showToast(d.error || 'Nie udało się dodać pliku', true); subFileSel.value = 'default'; }
+              else {
+                _subAssetPaths[d.id] = d.path;
+                const opt = document.createElement('option');
+                opt.value = 'saved:' + d.id;
+                opt.textContent = d.name;
+                subFileSel.appendChild(opt);
+                subFileSel.value = 'saved:' + d.id;
+                cutterState.customSubPath = d.path;
+                persistSel('saved:' + d.id);
+                showToast('Dodano na stałe: ' + d.name);
+              }
+            } catch (err) { showToast('Błąd połączenia', true); subFileSel.value = 'default'; }
+          }
+        } else if (v.indexOf('saved:') === 0) {
+          cutterState.customSubPath = _subAssetPaths[v.slice(6)] || '';
+          persistSel(v);
+        }
         _syncSubCustomRow();
         _cutterRefreshPreview();
-      }
-    });
+      });
+    }
     _syncSubCustomRow();
+
     refreshCutterHint();
   })();
 
@@ -3969,6 +4965,8 @@
         src_pos: cutterState.srcPos,
         src_x: Math.round(cutterState.srcX),
         src_y: Math.round(cutterState.srcY),
+        src_font: document.getElementById('cutter-src-font').value,
+        disable_typewriter: document.body.classList.contains('no-animations'),
         outro_src: document.getElementById('cutter-outro-src').value,
         outro_custom_path: cutterState.customOutroPath,
         outro_overlap: cutterState.outroOverlap,

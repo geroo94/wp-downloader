@@ -91,6 +91,36 @@ def _drawtext_fontfile() -> str:
     return "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 
+_FONT_CANDIDATES = {
+    "arial": [
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ],
+    "opensans": [
+        "/Library/Fonts/Open Sans.ttf",
+        os.path.expanduser("~/Library/Fonts/OpenSans-Regular.ttf"),
+        "C:/Windows/Fonts/OpenSans-Regular.ttf",
+        "/usr/share/fonts/truetype/open-sans/OpenSans-Regular.ttf",
+    ],
+}
+
+
+def _font_path(font_id: str) -> str:
+    """Rozwiązuje identyfikator czcionki z dropdownu "Wybór czcionki" (Fast
+    Cutter, pole Źródło) na bezwzględną ścieżkę pliku. "gilroy" (domyślna)
+    lub nieznany identyfikator → bundlowana Gilroy. Dla czcionek systemowych
+    (Arial/Open Sans) próbujemy typowe lokalizacje per-platforma; gdy żadna
+    nie istnieje na tej maszynie, cichy fallback do Gilroy — render nigdy
+    nie ma paść przez brakujący plik fontfile."""
+    gilroy = _drawtext_fontfile()
+    for c in _FONT_CANDIDATES.get(font_id or "gilroy", []):
+        if os.path.isfile(c):
+            return c
+    return gilroy
+
+
 def _filter_path_escape(p: str) -> str:
     """Ścieżka do wnętrza filtergraphu (fontfile=, sendcmd f=): forward
     slashe + dwukropek escaped (`C\\:` na Windows), inaczej parser filtrów
@@ -132,6 +162,10 @@ class CutterJob:
     src_pos: str = "tl"             # tl | tr | bl | br
     src_x: int = 24
     src_y: int = 24
+    src_font: str = "gilroy"        # gilroy | arial | opensans
+    # Ustawienia → "Wyłącz animacje interfejsu": skip efekt maszyny do pisania,
+    # pełny tekst źródła renderuje się statycznie od pierwszej klatki.
+    disable_typewriter: bool = False
     outro_src: str = ""             # "" | "default" | "custom"
     outro_custom_path: str = ""
     # Overlap: outro (z maską alfa, jeśli ją ma) nakładane overlay'em X sekund
@@ -394,17 +428,26 @@ class CutterManager:
         fps = float(meta["fps"])
         fps_s = f"{fps:.6g}"
 
-        # Moment wejścia tyłówki liczony z góry — okno drugiej instancji
-        # suba musi się skończyć dokładnie w tym punkcie.
+        # ── Timing warstwy Outro (compositing, nie doklejanie) ──────────
+        # Formuła: outro_start = dur - od + delay. Delay=0 → CAŁE outro
+        # nałożone na końcówkę materiału (kończy się razem z nim); delay=od
+        # → outro w całości za końcem (czyste doklejenie). Ogon wystający
+        # za koniec materiału (tail) = delay, dokładany czarną dokładką.
         od = ov = 0.0
+        outro_start = dur
+        outro_tail = 0.0
         if outro:
             od = max(0.1, float((outro_meta or {}).get("duration") or 5.0))
             ov = self._overlap_value(job, dur, od)
-        outro_start = dur - ov
+            outro_start = max(0.0, dur - od + ov)
+            outro_tail = max(0.0, (outro_start + od) - dur)
 
-        # Okna czasowe animacji subskrypcji: [0, sd] na starcie wycinka
-        # oraz [outro_start - sd, outro_start] tuż przed tyłówką. Druga
-        # instancja odpada, gdy wycinek jest za krótki i okna by się nałożyły.
+        # Okna czasowe animacji subskrypcji: [0, sd] na starcie wycinka oraz
+        # druga instancja kończąca się DOKŁADNIE na wejściu outro:
+        # t2 = [outro_start - sd, outro_start]. Rygorystycznie: SUB nie może
+        # nachodzić na czas trwania tyłówki ani wyświetlać się pod nią
+        # (zgłoszony bug podwójnego nałożenia na końcówce). Bez outro
+        # outro_start == dur, więc druga instancja domyka się z końcem klipu.
         sub_legs: list[tuple[float, float]] = []
         if sub and sub_meta:
             sd = max(0.2, min(float(sub_meta.get("duration") or 10.0), 30.0))
@@ -416,7 +459,7 @@ class CutterManager:
                 sub_legs.append((t2_start, t2_end))
             else:
                 logger.info("cutter[%s]: wycinek za krótki (%.1fs) na drugą "
-                            "instancję suba — zostaje tylko startowa",
+                            "instancję suba przed outro — zostaje tylko startowa",
                             job.request_id[:8], dur)
 
         inputs: list[str] = [
@@ -453,6 +496,17 @@ class CutterManager:
             inputs += ["-f", "lavfi", "-t", f"{outro_dur:.3f}",
                        "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
             outro_silence_idx = input_idx
+            input_idx += 1
+        # Ogon outro wystający za koniec materiału (= delay): czarna dokładka
+        # wideo doklejana concat'em do głównego klipu — jedyny NIEZAWODNY
+        # sposób przedłużenia strumienia z -ss/-t trimmed inputu
+        # (tpad=stop_mode=clone milczkiem nie dokleja klatek na takim
+        # wejściu — odtworzone empirycznie).
+        black_idx = -1
+        if outro and outro_tail > 0.05:
+            inputs += ["-f", "lavfi", "-t", f"{outro_tail:.3f}",
+                       "-i", f"color=black:size={main_w}x{main_h}:rate={fps_s}"]
+            black_idx = input_idx
             input_idx += 1
 
         # Wspólny format audio dla obu segmentów — concat wymaga zgodnych
@@ -506,7 +560,7 @@ class CutterManager:
                              .replace("'", "’")
                              .replace(";", ","))
             safe_full = clean.replace(":", r"\:").replace("%", r"\%")
-            fontfile = _filter_path_escape(_drawtext_fontfile())
+            fontfile = _filter_path_escape(_font_path(job.src_font))
             size_px = min(96, max(12, int(job.src_size or 28)))
             fontsize = max(12, round(size_px * main_h / 1080))
             # Marginesy z suwaków Pozycja X/Y źródła (px @1920x1080 → kadr)
@@ -519,38 +573,52 @@ class CutterManager:
                 "br": f"x=w-tw-{mx}:y=h-th-{my}",
             }.get(job.src_pos or "tl", f"x={mx}:y={my}")
 
-            # Typewriting dwufazowe: Faza 1 = sendcmd co 1/speed s robi
-            # `drawtext@src reinit` z coraz dłuższym prefiksem; prędkość
-            # min. 20 zn/s, przy długich tekstach rośnie tak, by animacja
-            # zamknęła się w ≤3 s. Faza 2 = ostatni reinit zostawia PEŁNY
-            # tekst statycznie do końca klipu (żadnych dalszych komend).
-            TYPE_SPEED = max(20.0, len(clean) / 3.0)
-            cmd_lines = []
-            for i in range(1, len(clean) + 1):
-                # Cały argument reinit w '...' (kanoniczna forma z docs);
-                # dwukropek/procent w treści escapowane dla parsera opcji.
-                chunk = clean[:i].replace(":", r"\:").replace("%", r"\%")
-                cmd_lines.append(
-                    f"{i / TYPE_SPEED:.3f} drawtext@src reinit 'text={chunk}';")
-            # Po zakończeniu pisania tekst zostaje do końca (ostatni reinit).
-            import tempfile
-            with tempfile.NamedTemporaryFile(
-                    "w", suffix=".sendcmd", delete=False, encoding="utf-8") as tf:
-                tf.write("\n".join(cmd_lines) + "\n")
-                sendcmd_path = tf.name
-            job.tmp_files.append(sendcmd_path)
+            if job.disable_typewriter:
+                # Ustawienia → "Wyłącz animacje interfejsu": pełny tekst od
+                # razu, bez sendcmd/reinit — statyczny drawtext.
+                fg.append(
+                    f"{base_v}drawtext=fontfile='{fontfile}':text='{safe_full}':"
+                    f"fontcolor=white:fontsize={fontsize}:"
+                    f"shadowx=2:shadowy=2:shadowcolor=black:"
+                    f"{pos_xy}[v2]"
+                )
+                base_v = "[v2]"
+                logger.debug("cutter[%s] źródło: %r size=%d pos=%s (statyczny, bez typewritera)",
+                             job.request_id[:8], safe_full, fontsize, job.src_pos)
+            else:
+                # Typewriting dwufazowe: Faza 1 = sendcmd co 1/speed s robi
+                # `drawtext@src reinit` z coraz dłuższym prefiksem; prędkość
+                # min. 20 zn/s, przy długich tekstach rośnie tak, by animacja
+                # zamknęła się w ≤3 s. Faza 2 = ostatni reinit zostawia PEŁNY
+                # tekst statycznie do końca klipu (żadnych dalszych komend).
+                TYPE_SPEED = max(20.0, len(clean) / 3.0)
+                cmd_lines = []
+                for i in range(1, len(clean) + 1):
+                    # Cały argument reinit w '...' (kanoniczna forma z docs);
+                    # dwukropek/procent w treści escapowane dla parsera opcji.
+                    chunk = clean[:i].replace(":", r"\:").replace("%", r"\%")
+                    cmd_lines.append(
+                        f"{i / TYPE_SPEED:.3f} drawtext@src reinit 'text={chunk}';")
+                # Po zakończeniu pisania tekst zostaje do końca (ostatni reinit).
+                import tempfile
+                with tempfile.NamedTemporaryFile(
+                        "w", suffix=".sendcmd", delete=False, encoding="utf-8") as tf:
+                    tf.write("\n".join(cmd_lines) + "\n")
+                    sendcmd_path = tf.name
+                job.tmp_files.append(sendcmd_path)
 
-            fg.append(
-                f"{base_v}sendcmd=f='{_filter_path_escape(sendcmd_path)}',"
-                f"drawtext@src=fontfile='{fontfile}':text='':"
-                f"fontcolor=white:fontsize={fontsize}:bordercolor=black:borderw=2:"
-                f"{pos_xy}[v2]"
-            )
-            base_v = "[v2]"
-            # safe_full trzymamy do logów diagnostycznych pełnej treści
-            logger.debug("cutter[%s] źródło: %r size=%d pos=%s (typewriter %d kroków)",
-                         job.request_id[:8], safe_full, fontsize, job.src_pos,
-                         len(cmd_lines))
+                # Bez box=1/boxcolor (brak czarnego tła pod tekstem) — tekst
+                # leci bezpośrednio na obrazie, czytelność na jasnych kadrach
+                # zapewnia delikatny cień (shadowx/y + shadowcolor) zamiast
+                # pełnej ramki.
+                fg.append(
+                    f"{base_v}sendcmd=f='{_filter_path_escape(sendcmd_path)}',"
+                    f"drawtext@src=fontfile='{fontfile}':text='':"
+                    f"fontcolor=white:fontsize={fontsize}:"
+                    f"shadowx=2:shadowy=2:shadowcolor=black:"
+                    f"{pos_xy}[v2]"
+                )
+                base_v = "[v2]"
 
         # ── Animacja subskrypcji: overlay z alfą w oknach enable=between().
         # setpts przesuwa timestampy instancji do jej okna; eof_action=pass
@@ -590,58 +658,58 @@ class CutterManager:
 
         out_limit: list[str] = []
         # -shortest: dobre ogólne zabezpieczenie przeciw resztkowemu driftowi
-        # klatek (patrz uzasadnienie przy konstrukcji cmd niżej) — bezpieczne
-        # dla obu trybów teraz, gdy oba korzystają z solidnych, natywnych
-        # filtrów ffmpeg (concat / xfade+acrossfade) zamiast ręcznego
-        # tpad+overlay+amix, które w praktyce POTRAFIŁO ciąć wideo do samej
-        # długości głównego klipu (tpad milczkiem nie dokleja klatek, gdy
-        # jego wejście pochodzi z uprzednio przyciętego -ss/-t strumienia —
-        # znany, odtworzony empirycznie problem niezależny od kanału alfy).
+        # klatek (patrz uzasadnienie przy konstrukcji cmd niżej).
         use_shortest = True
         if outro:
             outro_a_src = (f"[{outro_silence_idx}:a]" if outro_silence_idx >= 0
                            else f"[{outro_idx}:a]")
-            if ov > 0:
-                # ── Tryb OVERLAP: crossfade (xfade/acrossfade) zamiast
-                # ręcznego tpad+overlay+amix. tpad=stop_mode=clone milczkiem
-                # nie dokleja klatek gdy jego input pochodzi z materiału
-                # przyciętego przez -ss/-t na wejściu (odtworzone empirycznie:
-                # wideo kończyło się na długości samego głównego klipu,
-                # ignorując całe outro, mimo poprawnego audio przez amix).
-                # xfade/acrossfade to naturalne, przetestowane prymitywy
-                # ffmpeg do crossfade dwóch klipów — wymagają zgodnego
-                # pix_fmt/rozdzielczości/fps po obu stronach (stąd identyczny
-                # łańcuch scale/pad/format/fps na outro jak w concat).
-                # xfade wymaga JAWNIE zadeklarowanego stałego fps na OBU
-                # wejściach, inaczej twardy błąd ("needs to be a constant
-                # frame rate" / "do not match"). `fps=` MUSI być OSTATNIM
-                # filtrem w łańcuchu — jeśli `setpts` idzie po nim, ffmpeg
-                # gubi metadane stałego fps i xfade znowu widzi "1/0"
-                # (odtworzone empirycznie: fps przed setpts → crash, fps po
-                # setpts → działa).
-                fg.append(
-                    f"[{outro_idx}:v]scale={main_w}:{main_h}:force_original_aspect_ratio=decrease,"
-                    f"pad={main_w}:{main_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
-                    f"setsar=1,format=yuv420p,setpts=PTS-STARTPTS,fps={fps_s}[voutro]"
-                )
+            # ── Outro = ZAWSZE warstwa compositingu (overlay z alfą), nigdy
+            # doklejenie concat'em. Timing z formuły outro_start = dur-od+delay
+            # (patrz komentarz przy wyliczeniu na górze): delay=0 → całe outro
+            # nałożone na końcówkę materiału, delay=od → czyste doklejenie.
+            # Maska alfa na początku .mov przepuszcza główny materiał pod
+            # spodem; NIE xfade/crossfade (rozmywa zamiast komponować).
+            #
+            # Struktura (wzorzec identyczny ze sprawdzonym overlayem SUB):
+            #   1. [main] (+ czarna dokładka długości ogona, gdy delay > 0)
+            #      --concat--> [vbase]   (tpad milczkiem nie dokleja klatek
+            #      na -ss/-t inpucie — stąd concat z lavfi color)
+            #   2. [outro] setpts +outro_start, pad color=black@0.0,
+            #      format=yuva420p — jawna konwersja do formatu z kanałem
+            #      alfa PRZED overlay'em (źródło bez alfy dostaje alfę=1,
+            #      źródło z alfą zachowuje maskę; nigdy czarne tło).
+            #   3. overlay shortest=0 + eof_action=pass +
+            #      enable='gte(t,outro_start)' (enable chroni przed framesync
+            #      duplikującym pierwszą klatkę outro od t=0)
+            #   4. format=yuv420p dopiero PO overlay'u.
+            if black_idx >= 0:
                 fg.append(f"{base_v}fps={fps_s}[vmaincfr]")
-                fg.append(
-                    f"[vmaincfr][voutro]xfade=transition=fade:duration={ov:.3f}:"
-                    f"offset={(dur - ov):.3f}[vfinal]"
-                )
-                fg.append(f"{outro_a_src}asetpts=PTS-STARTPTS,{afmt}[aoutro]")
-                fg.append(f"{base_a}[aoutro]acrossfade=d={ov:.3f}[afinal]")
+                fg.append(f"[{black_idx}:v]setsar=1,format=yuv420p[vblack]")
+                fg.append(f"[vmaincfr][vblack]concat=n=2:v=1:a=0[vbase]")
+                vbase = "[vbase]"
             else:
-                # ── Tryb CONCAT (overlap = 0): outro doklejone po materiale.
-                # Parametry (rozmiar/SAR/fps/pix_fmt) muszą się zgadzać,
-                # inaczej concat odmawia albo produkuje śmieci.
-                fg.append(
-                    f"[{outro_idx}:v]scale={main_w}:{main_h}:force_original_aspect_ratio=decrease,"
-                    f"pad={main_w}:{main_h}:(ow-iw)/2:(oh-ih)/2:color=black,"
-                    f"setsar=1,fps={fps_s},format=yuv420p,setpts=PTS-STARTPTS[voutro]"
-                )
-                fg.append(f"{outro_a_src}asetpts=PTS-STARTPTS,{afmt}[aoutro]")
-                fg.append(f"{base_v}{base_a}[voutro][aoutro]concat=n=2:v=1:a=1[vfinal][afinal]")
+                vbase = base_v
+            fg.append(
+                f"[{outro_idx}:v]scale={main_w}:{main_h}:force_original_aspect_ratio=decrease,"
+                f"pad={main_w}:{main_h}:(ow-iw)/2:(oh-ih)/2:color=black@0.0,"
+                f"setsar=1,format=yuva420p,setpts=PTS-STARTPTS+{outro_start:.3f}/TB[voutro]"
+            )
+            fg.append(
+                f"{vbase}[voutro]overlay=0:0:shortest=0:eof_action=pass:format=auto:"
+                f"enable='gte(t,{outro_start:.3f})'[vov]"
+            )
+            fg.append("[vov]format=yuv420p[vfinal]")
+            # Audio: oryginalna ścieżka materiału jest błyskawicznie wyciszana
+            # krzywą 0.5 s TUŻ PRZED wejściem outro (afade=out kończy się
+            # dokładnie w outro_start) — dźwięk tła znika zanim ścieżka
+            # tyłówki wejdzie na pełnym poziomie. Audio outro wjeżdża z
+            # opóźnieniem outro_start (adelay); duration=longest domyka
+            # całość na T = max(dur, outro_start + od).
+            fade_st = max(0.0, outro_start - 0.5)
+            fg.append(f"{base_a}afade=t=out:st={fade_st:.3f}:d=0.5[amfade]")
+            fg.append(f"{outro_a_src}asetpts=PTS-STARTPTS,{afmt},"
+                      f"adelay={int(outro_start * 1000)}:all=1[aoutro]")
+            fg.append(f"[amfade][aoutro]amix=inputs=2:duration=longest:normalize=0[afinal]")
             v_map, a_map = "[vfinal]", "[afinal]"
         else:
             v_map, a_map = base_v, base_a
@@ -716,11 +784,14 @@ class CutterManager:
             sub_path = self._resolve_sub(job)
             sub_meta = await self._probe_media(sub_path) if sub_path else None
             if outro_meta:
-                # Outro wydłuża output (minus ewentualny overlap) — bez tego
-                # progress bar zatrzymałby się na ~80% do końca renderu.
+                # Outro wydłuża output o ogon wystający za koniec materiału
+                # (formuła compositingu: outro_start = dur - od + delay,
+                # tail = delay dla typowych długości) — bez tego progress
+                # bar zatrzymałby się przed 100% do końca renderu.
                 od = max(0.1, float(outro_meta.get("duration") or 5.0))
                 ov = self._overlap_value(job, total_dur, od)
-                total_dur += max(0.0, od - ov)
+                o_start = max(0.0, total_dur - od + ov)
+                total_dur += max(0.0, (o_start + od) - total_dur)
             cmds = [self._cmd_branded(job, meta, outro_meta, sub_meta, force_sw)]
             mode = "branded"
         else:

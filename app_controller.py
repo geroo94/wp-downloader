@@ -23,7 +23,6 @@ Sekwencja startu (single-window):
 
 import logging
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -52,20 +51,149 @@ class LoadingProgress(QObject):
     progress = pyqtSignal(int, str)
 
 
-def _check_and_install_deps(progress: LoadingProgress) -> None:
-    """Weryfikuje zależności w wątku tła i raportuje przez sygnał ``progress``.
+def _check_binaries(progress: LoadingProgress) -> None:
+    """Etap 1/3 health-checka: ffmpeg/ffprobe/deno są na miejscu i mają
+    nadane uprawnienia wykonywania. PyInstaller czasem gubi exec-bit przy
+    kopiowaniu `datas` (dlatego build_local.sh robi to samo po kompilacji) —
+    to jest druga linia obrony w runtime, na wypadek gdyby coś to nadpisało
+    (np. rozpakowanie portable ZIP-a przez narzędzie, które czyści bity)."""
+    progress.progress.emit(12, "Sprawdzanie plików binarnych (ffmpeg/ffprobe/deno)…")
+    from binaries import get_ffmpeg, get_ffprobe
+    for getter, name in ((get_ffmpeg, "ffmpeg"), (get_ffprobe, "ffprobe")):
+        try:
+            p = getter()
+            if os.path.isfile(p) and not os.access(p, os.X_OK):
+                os.chmod(p, 0o755)
+                logger.info("Health-check: nadano +x %s", p)
+        except Exception as exc:
+            logger.warning("Health-check binarki %s: %s", name, exc)
 
-    Zero-dependency: w spakowanej aplikacji yt-dlp / streamlink / ffmpeg są
-    wbudowane, więc NIC nie instalujemy na maszynie usera. Pip-fallback dla
-    brakujących pakietów działa wyłącznie w trybie deweloperskim (nie-frozen),
-    jako wygoda przy uruchamianiu ze źródeł."""
-    from binaries import get_ffmpeg
+    try:
+        from yt_dlp_worker import _bundled_runtime_dir
+        binary = "deno.exe" if sys.platform == "win32" else "deno"
+        for cand_dir in _bundled_runtime_dir():
+            p = os.path.join(cand_dir, binary)
+            if os.path.isfile(p):
+                if not os.access(p, os.X_OK):
+                    os.chmod(p, 0o755)
+                    logger.info("Health-check: nadano +x %s", p)
+                break
+        else:
+            logger.warning("Health-check: bundlowany deno nieodnaleziony (bin/)")
+    except Exception as exc:
+        logger.warning("Health-check deno: %s", exc)
+
+
+def _check_ytdlp_update(progress: LoadingProgress) -> None:
+    """Etap 2/3: cichy version-check + best-effort auto-update yt-dlp.
+
+    UWAGA architektoniczna: `yt_dlp.update.update_self` NIE pasuje tutaj —
+    ten mechanizm jest do samo-aktualizacji STANDALONE binarki yt-dlp.exe.
+    W tej aplikacji yt-dlp jest zaimportowanym modułem Pythona wewnątrz
+    WŁASNEGO PyInstaller bundla; wywołanie update_self próbowałoby podmienić
+    plik wykonywalny NASZEJ aplikacji, myśląc że to yt-dlp.exe — realne
+    ryzyko zepsucia instalacji. Zamiast tego używamy tej samej bezpiecznej
+    metody co `perform_system_update` w server.py: pip install do overlay
+    dir (get_overlay_dir), który ma priorytet nad wersją bundlowaną, bez
+    dotykania samego pliku aplikacji."""
+    progress.progress.emit(25, "Sprawdzanie yt-dlp…")
+    try:
+        import yt_dlp
+        cur = getattr(getattr(yt_dlp, "version", None), "__version__", "") or ""
+    except Exception as exc:
+        logger.warning("Health-check yt-dlp import: %s", exc)
+        return
+
+    latest = ""
+    try:
+        import json
+        import urllib.request
+        with urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=4) as r:
+            latest = json.load(r).get("info", {}).get("version", "") or ""
+    except Exception as exc:
+        logger.debug("Health-check yt-dlp: PyPI check pominięty (offline?): %s", exc)
+        progress.progress.emit(30, "yt-dlp: brak sieci, pomijam auto-update.")
+        return
+
+    if not latest or latest == cur:
+        progress.progress.emit(30, "yt-dlp jest aktualny.")
+        return
+
+    progress.progress.emit(28, f"Aktualizowanie yt-dlp… ({cur} → {latest})")
+    try:
+        from server import get_overlay_dir
+        overlay = get_overlay_dir()
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "-U", "--no-cache-dir",
+             "--target", overlay, "--upgrade-strategy=eager", "yt-dlp"],
+            timeout=25, capture_output=True,
+        )
+        progress.progress.emit(30, "yt-dlp zaktualizowany (efekt po następnym restarcie).")
+    except Exception as exc:
+        logger.warning("Health-check auto-update yt-dlp: %s", exc)
+
+
+def _bundled_whisper_models_dir() -> str:
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, "assets", "models", "whisper")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "models", "whisper")
+
+
+# SHA256 identyczne z whisper._MODELS (whisper._download waliduje tym samym
+# hashem przy load_model — zaszyte pliki muszą się z nim zgadzać co do bajtu).
+_WHISPER_BUNDLED_SHA256 = {
+    "tiny.pt": "65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9",
+    "base.pt": "ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e",
+}
+
+
+def _check_whisper_models(progress: LoadingProgress) -> None:
+    """Etap 3/3: modele Whisper zaszyte w paczce (assets/models/whisper)
+    istnieją i mają poprawny SHA256 — ten sam checksum, którego
+    whisper._download() używa do walidacji cache. Brak modelu nie jest
+    fatalny (transkrypcja i tak dociągnie go z sieci przy pierwszym użyciu),
+    ale uszkodzony plik logujemy głośno, żeby było widać w diagnostyce."""
+    progress.progress.emit(38, "Weryfikacja bazy modeli Whisper…")
+    import hashlib
+    models_dir = _bundled_whisper_models_dir()
+    for fname, expected in _WHISPER_BUNDLED_SHA256.items():
+        p = os.path.join(models_dir, fname)
+        if not os.path.isfile(p):
+            logger.info("Health-check: model whisper %s niedołączony do paczki "
+                        "(dociągnie się z sieci przy pierwszej transkrypcji)", fname)
+            continue
+        try:
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            if h.hexdigest() != expected:
+                logger.warning("Health-check: model whisper %s USZKODZONY (SHA256 mismatch)", fname)
+            else:
+                logger.info("Health-check: model whisper %s OK (offline-ready)", fname)
+        except OSError as exc:
+            logger.warning("Health-check whisper %s: %s", fname, exc)
+    progress.progress.emit(45, "Baza modeli Whisper zweryfikowana.")
+
+
+def _check_and_install_deps(progress: LoadingProgress) -> None:
+    """Health-check sekwencyjny przed wejściem do menu głównego: (1) binarki
+    ffmpeg/ffprobe/deno + chmod, (2) cichy version-check + best-effort
+    auto-update yt-dlp, (3) weryfikacja modeli Whisper zaszytych w paczce,
+    (4) tylko w trybie deweloperskim (nie-frozen) — pip-install brakujących
+    pakietów Python jako wygoda przy uruchamianiu ze źródeł.
+
+    Zero-dependency w buildzie produkcyjnym: yt-dlp/streamlink/ffmpeg są
+    wbudowane, więc etap (4) w praktyce nic nie robi poza zalogowaniem stanu."""
+    _check_binaries(progress)
+    _check_ytdlp_update(progress)
+    _check_whisper_models(progress)
 
     is_frozen = hasattr(sys, "_MEIPASS")
     pip_pkgs = [("yt-dlp", "yt_dlp"), ("streamlink", "streamlink")]
     n = len(pip_pkgs)
     for i, (pkg_name, import_name) in enumerate(pip_pkgs):
-        pct = 10 + int((i / n) * 40)
+        pct = 50 + int((i / n) * 25)
         progress.progress.emit(pct, f"Sprawdzanie {pkg_name}…")
         try:
             __import__(import_name)
@@ -85,12 +213,7 @@ def _check_and_install_deps(progress: LoadingProgress) -> None:
             except Exception as exc:
                 logger.warning("Auto-install %s failed: %s", pkg_name, exc)
 
-    progress.progress.emit(55, "Sprawdzanie ffmpeg…")
-    ff = get_ffmpeg()
-    if ff == "ffmpeg" and not shutil.which("ffmpeg"):
-        logger.warning("Bundlowany ffmpeg nieodnaleziony — sprawdź bin/ w paczce")
-    else:
-        logger.info("ffmpeg: %s", ff)
+    progress.progress.emit(75, "Komponenty gotowe.")
 
 
 def _server_ready() -> bool:
@@ -131,9 +254,14 @@ class AppController:
     # ── slots ────────────────────────────────────────────────────────────
 
     def _on_progress(self, percent: int, text: str) -> None:
-        """Slot: loguje stage. Działa na głównym wątku (QueuedConnection)."""
+        """Slot: loguje stage i przekazuje (percent, text) na splash w JS przez
+        QWebChannel. Działa na głównym wątku (QueuedConnection)."""
         if text:
             logger.info("loading %d%%: %s", percent, text)
+        try:
+            self.main_window.bridge.loadingProgress.emit(percent, text)
+        except Exception:
+            pass
 
     def _on_ui_ready(self) -> None:
         """JS poinformował że interfejs się załadował (WS init przyszedł).

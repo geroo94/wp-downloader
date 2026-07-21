@@ -62,6 +62,10 @@ class WebBridge(QObject):
     """
 
     ui_ready = pyqtSignal()
+    # Qt → JS: health-check startowy (patrz app_controller._check_and_install_deps)
+    # emituje (percent, status_text) — JS słucha przez channel.objects.wpBridge
+    # i aktualizuje pasek/status na splashu w czasie rzeczywistym.
+    loadingProgress = pyqtSignal(int, str)
 
     def __init__(self, main_window: QWidget):
         super().__init__()

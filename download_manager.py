@@ -1,7 +1,8 @@
 import asyncio
+import time
 import uuid
 from typing import Any, Dict, Set
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -29,6 +30,9 @@ class DownloadTask:
     # "download" (yt-dlp/live) | "render" (Fast Cutter ffmpeg render).
     # renderTasks() w JS wybiera layout karty na podstawie tego pola.
     job_type: str = "download"
+    # Znacznik czasu utworzenia zadania (epoch s) — datownik na kafelku
+    # w Procesach (JS formatuje jako "12.07.2026 00:34").
+    created_at: float = field(default_factory=time.time)
 
 
 class DownloadManager:
@@ -166,6 +170,7 @@ class DownloadManager:
             "transcription_progress": round(t.transcription_progress, 1),
             "speed_str": t.speed_str,
             "job_type": t.job_type,
+            "created_at": t.created_at,
             }
             for t in self.tasks.values()
         ]
@@ -203,4 +208,5 @@ class DownloadManager:
             "transcription_progress": round(task.transcription_progress, 1),
             "speed_str": task.speed_str,
             "job_type": task.job_type,
+            "created_at": task.created_at,
         })

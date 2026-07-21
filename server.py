@@ -16,6 +16,8 @@ import json
 import logging
 import re
 import subprocess
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,6 +30,7 @@ from pydantic import BaseModel
 import sys
 import os
 
+from assets_manager import add_custom_asset, list_custom_assets
 from binaries import get_ffmpeg, get_ffprobe
 from cutter import CutterJob, CutterManager
 from download_manager import DownloadManager
@@ -233,6 +236,27 @@ _INITIAL_PROMPTS = {
 }
 
 
+def _bundled_whisper_dir() -> str:
+    """assets/models/whisper zaszyte w paczce (.spec `datas`) — działa
+    w dev (ścieżka względem repo) i w spakowanym PyInstaller (_MEIPASS)."""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, "assets", "models", "whisper")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "models", "whisper")
+
+
+def _whisper_download_root(model_size: str) -> str | None:
+    """Jeśli żądany model jest zaszyty w paczce, wskaż na niego — whisper
+    load_model() zweryfikuje SHA256 i użyje go BEZ dociągania z sieci.
+    Modele niedołączone (małe: tylko tiny/base — patrz build_local.sh)
+    wracają do domyślnego cache whisper (~/.cache/whisper); NIE zapisujemy
+    nigdy do wnętrza paczki (może być tylko-do-odczytu, poza tym duże
+    modele nie mają tam po co siedzieć na stałe)."""
+    bundled = _bundled_whisper_dir()
+    if os.path.isfile(os.path.join(bundled, f"{model_size}.pt")):
+        return bundled
+    return None
+
+
 async def _run_transcription(manager: DownloadManager, task_id: str, video_path: str,
                               language: str = "pl", model_size: str = "small") -> None:
     """Background task: transcribe a video file with Whisper and save as .txt with timecodes.
@@ -272,7 +296,7 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
             else:
                 ssl._create_default_https_context = _create_unverified_https_context
 
-            model = whisper.load_model(model_size)
+            model = whisper.load_model(model_size, download_root=_whisper_download_root(model_size))
             # Parametry zoptymalizowane pod jakość transkrypcji polskiej:
             # - task="transcribe" (nie "translate" które zamienia na angielski)
             # - language="pl" (lub user-selected) — explicit, bez auto-detect halucynacji
@@ -415,6 +439,52 @@ _cutter = CutterManager()
 # (np. przy seek) zabija poprzedni proces przed spawn nowego.
 _cutter_live_procs: dict[str, asyncio.subprocess.Process] = {}
 
+# Aktywny pipeline transkodera podglądu Live Stream (zakładka Live Streamy):
+# ffmpeg czyta z bufora DVR (patrz niżej) i transkoduje do WebM. Klucz = session_id.
+_live_preview_sessions: dict[str, dict] = {}
+
+
+def _kill_live_preview_sync(session: str) -> None:
+    entry = _live_preview_sessions.pop(session, None)
+    if not entry:
+        return
+    entry["stop"].set()
+    proc = entry.get("proc")
+    if proc and proc.poll() is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+# ── Live Stream DVR/Timeshift: bufor na dysku, niezależny od podglądu ───────
+# streamlink (biblioteka Pythona, in-process) pisze surowy strumień do
+# rosnącego pliku .ts na dysku w osobnym wątku — trwa niezależnie od tego czy
+# ktoś akurat ogląda podgląd. Dzięki temu user może przewinąć wstecz nawet
+# jeśli chwilę nie patrzył na player. Klucz = session_id.
+_live_dvr_buffers: dict[str, dict] = {}
+
+
+def _dvr_dir() -> str:
+    import tempfile as _tf
+    d = os.path.join(_tf.gettempdir(), "wp_downloader_dvr")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _kill_dvr_buffer_sync(session: str) -> None:
+    """Zatrzymuje wątek-nagrywarkę bufora DVR i kasuje plik tymczasowy."""
+    entry = _live_dvr_buffers.pop(session, None)
+    if not entry:
+        return
+    entry["stop"].set()
+    path = entry.get("path")
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
 
 async def _kill_cutter_live_proc(session: str) -> None:
     proc = _cutter_live_procs.pop(session, None)
@@ -482,6 +552,14 @@ def create_app(manager: DownloadManager) -> FastAPI:
                     job.proc.kill()
                 except Exception:
                     pass
+
+        # Live Stream DVR teardown — zabij nagrywarki bufora i skasuj pliki
+        # tymczasowe, żeby zamknięcie aplikacji nie zostawiało sierot
+        # streamlink ani nie zaśmiecało dysku plikami .ts.
+        for session in list(_live_preview_sessions):
+            _kill_live_preview_sync(session)
+        for session in list(_live_dvr_buffers):
+            _kill_dvr_buffer_sync(session)
 
     app = FastAPI(
         title="WP Downloader API",
@@ -589,6 +667,173 @@ def create_app(manager: DownloadManager) -> FastAPI:
     @app.get("/api/proxy/status")
     async def proxy_status():
         return JSONResponse(_proxy.status())
+
+    # ── Live Stream — podgląd na żywo + DVR/timeshift w zakładce Live Streamy ──
+
+    class TimeshiftStartRequest(BaseModel):
+        url: str
+        session: str = "default"
+        quality: str = "best"
+
+    @app.post("/api/live/timeshift-start")
+    async def live_timeshift_start(req: TimeshiftStartRequest):
+        """Startuje bufor DVR: streamlink rozwiązuje URL do surowego strumienia
+        i wątek-nagrywarka dopisuje bajty do rosnącego pliku .ts na dysku,
+        niezależnie od tego czy podgląd jest akurat otwarty — user może
+        przewinąć wstecz nawet gdy chwilę nie patrzył na player.
+
+        Ta sama sesja + ten sam URL → zwracamy istniejący bufor (nie
+        duplikujemy połączenia streamlink). Inny URL → stary bufor jest
+        zabijany i kasowany, startuje nowy."""
+        if not req.url:
+            return JSONResponse({"error": "Brak URL"}, status_code=400)
+        existing = _live_dvr_buffers.get(req.session)
+        if existing and existing.get("url") == req.url:
+            return JSONResponse({
+                "session": req.session,
+                "buffer_path": existing["path"],
+                "started_at": existing["started_epoch"],
+            })
+        _kill_dvr_buffer_sync(req.session)
+        _kill_live_preview_sync(req.session)
+
+        loop = asyncio.get_event_loop()
+        try:
+            from streamlink import Streamlink  # type: ignore
+            sl = Streamlink()
+            streams = await loop.run_in_executor(None, sl.streams, req.url)
+        except Exception as e:
+            return JSONResponse({"error": f"Streamlink: {e}"}, status_code=500)
+        if not streams:
+            return JSONResponse({"error": "Brak dostępnych streamów dla tego URL"}, status_code=404)
+        stream_obj = streams.get(req.quality) or streams.get("best")
+        if stream_obj is None:
+            avail = ", ".join(streams.keys())
+            return JSONResponse({"error": f"Brak jakości '{req.quality}'. Dostępne: {avail}"}, status_code=404)
+
+        buffer_path = os.path.join(_dvr_dir(), f"{req.session}_{uuid.uuid4().hex[:8]}.ts")
+        stop_event = threading.Event()
+        started_epoch = time.time()
+
+        def _record() -> None:
+            """Wątek-nagrywarka: czyta bajty streamu (blocking, streamlink nie
+            ma async API) i dopisuje je do pliku bufora na dysku."""
+            try:
+                with stream_obj.open() as fd, open(buffer_path, "wb") as out:
+                    while not stop_event.is_set():
+                        chunk = fd.read(65536)
+                        if not chunk:
+                            break
+                        try:
+                            out.write(chunk)
+                            out.flush()
+                        except OSError:
+                            break
+            except Exception as e:
+                logger.warning("dvr-buffer record error (session=%s): %s", req.session, e)
+
+        thread = threading.Thread(target=_record, daemon=True, name=f"dvr-record-{req.session}")
+        _live_dvr_buffers[req.session] = {
+            "path": buffer_path, "stop": stop_event, "thread": thread,
+            "started_epoch": started_epoch, "url": req.url,
+        }
+        thread.start()
+
+        return JSONResponse({
+            "session": req.session,
+            "buffer_path": buffer_path,
+            "started_at": started_epoch,
+        })
+
+    @app.get("/api/live/stream-preview")
+    async def live_stream_preview(session: str = "default", seek_seconds: float = 0.0):
+        """Podgląd z bufora DVR: ffmpeg czyta rosnący plik bufora zaczynając
+        od `seek_seconds` (flaga -ss przed -i — na pliku regularnym to szybki
+        seek, nie decode-and-discard) i transkoduje w locie do WebM/VP8+Vorbis
+        (Chromium w PyQt6-WebEngine nie ma H264). Low-latency flagi
+        (-probesize 32 -analyzeduration 0 -fflags nobuffer -flags low_delay)
+        minimalizują opóźnienie startu — player dostaje pierwsze pakiety
+        prawie natychmiast zamiast czekać na pełną analizę streamu.
+
+        Wymaga wcześniejszego /api/live/timeshift-start dla tej sesji —
+        bufor musi już istnieć na dysku."""
+        entry = _live_dvr_buffers.get(session)
+        if not entry:
+            return JSONResponse(
+                {"error": "Brak aktywnego bufora — wywołaj timeshift-start"},
+                status_code=400)
+        _kill_live_preview_sync(session)
+
+        seek_seconds = max(0.0, float(seek_seconds))
+        ffmpeg_cmd = [
+            get_ffmpeg(), "-hide_banner", "-loglevel", "error",
+            "-probesize", "32", "-analyzeduration", "0",
+            "-fflags", "nobuffer", "-flags", "low_delay",
+            "-ss", f"{seek_seconds:.3f}", "-i", entry["path"],
+            # Jawny -map: przy probesize=32/analyzeduration=0 (celowo minimalne
+            # dla low-latency startu) auto-detekcja strumieni ffmpeg bywa zbyt
+            # krótka, żeby zdążyć zarejestrować ścieżkę audio obok wideo —
+            # bez jawnej mapy podgląd milczkiem tracił dźwięk (odtworzone
+            # empirycznie na buforze .ts z audio+wideo). "?" = opcjonalny
+            # strumień, gdy źródło faktycznie nie ma audio.
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8",
+            "-b:v", "1M", "-vf", "scale=-2:480",
+            "-c:a", "libvorbis", "-b:a", "96k",
+            "-f", "webm",
+            "-cluster_size_limit", "2M", "-cluster_time_limit", "2000",
+            "pipe:1",
+        ]
+        try:
+            proc = subprocess.Popen(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            return JSONResponse({"error": "ffmpeg brak w PATH"}, status_code=500)
+
+        stop_event = threading.Event()
+        _live_preview_sessions[session] = {"proc": proc, "stop": stop_event}
+        loop = asyncio.get_event_loop()
+
+        async def _gen():
+            try:
+                while True:
+                    chunk = await loop.run_in_executor(None, proc.stdout.read, 65536)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                stop_event.set()
+                if proc.poll() is None:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                _live_preview_sessions.pop(session, None)
+
+        return StreamingResponse(
+            _gen(),
+            media_type="video/webm",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/api/live/stream-preview-stop")
+    async def live_stream_preview_stop(session: str = "default"):
+        """Zabija SAM pipeline podglądu (ffmpeg transcoder) dla sesji — bufor
+        DVR na dysku zostaje żywy (user może wrócić i przewinąć wstecz)."""
+        _kill_live_preview_sync(session)
+        return JSONResponse({"stopped": True})
+
+    @app.post("/api/live/timeshift-stop")
+    async def live_timeshift_stop(session: str = "default"):
+        """Zatrzymuje bufor DVR (nagrywarkę + plik tymczasowy) ORAZ aktywny
+        podgląd — wołane przy zmianie streamu lub zejściu z zakładki Live
+        Streamy, żeby nie zostawiać sierot streamlink/ffmpeg ani plików tymczasowych."""
+        _kill_live_preview_sync(session)
+        _kill_dvr_buffer_sync(session)
+        return JSONResponse({"stopped": True})
 
     # ── OBS WebSocket ───────────────────────────────────────────────────────
 
@@ -706,6 +951,43 @@ def create_app(manager: DownloadManager) -> FastAPI:
                         details.append(f"{sub}: {_human_size(size)}")
         except Exception as e:
             logger.warning("clear_cache: chromium cache fail: %s", e)
+
+        # 4. Osierocone bufory DVR (Live Stream timeshift) — pliki .ts sprzątane
+        # normalnie w _kill_dvr_buffer_sync(), zostają tylko po crashu w trakcie
+        # nagrywania. Aktywne sesje (_live_dvr_buffers) pomijamy — nie kasujemy
+        # bufora, który user właśnie ogląda.
+        try:
+            active_paths = {e["path"] for e in _live_dvr_buffers.values()}
+            dvr_dir = _dvr_dir()
+            size = 0
+            for name in os.listdir(dvr_dir):
+                p = os.path.join(dvr_dir, name)
+                if p in active_paths:
+                    continue
+                try:
+                    size += os.path.getsize(p)
+                    os.remove(p)
+                except OSError:
+                    pass
+            freed += size
+            if size:
+                details.append(f"DVR bufor Live Stream: {_human_size(size)}")
+        except Exception as e:
+            logger.warning("clear_cache: dvr buffer sweep fail: %s", e)
+
+        # 5. Reset zasobów trwałych (Outro/Sub dodanych przez "Dodaj nowe
+        # wideo…") — jedyne miejsce w aplikacji, które kasuje custom_assets/
+        # i config.json. Poza tym przyciskiem te pliki żyją wiecznie.
+        try:
+            from assets_manager import clear_all_custom_assets, get_app_data_dir
+            custom_dir = os.path.join(get_app_data_dir(), "custom_assets")
+            size = _dir_size(custom_dir)
+            n = clear_all_custom_assets()
+            freed += size
+            if n:
+                details.append(f"Własne zasoby Outro/Sub ({n} plików): {_human_size(size)}")
+        except Exception as e:
+            logger.warning("clear_cache: custom assets reset fail: %s", e)
 
         logger.info("clear_cache: zwolniono %s (%s)", _human_size(freed), "; ".join(details) or "brak")
         return JSONResponse({
@@ -879,6 +1161,33 @@ def create_app(manager: DownloadManager) -> FastAPI:
             logger.warning("reveal: subprocess failed: %s (path=%r)", e, path)
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    # ── Zasoby trwałe (Outro/Sub) — patrz assets_manager.py ─────────────
+
+    class AddCustomAssetRequest(BaseModel):
+        kind: str  # "outro" | "sub"
+        source_path: str
+
+    @app.get("/api/assets/custom")
+    async def assets_custom_list(kind: str):
+        if kind not in ("outro", "sub"):
+            return JSONResponse({"error": "Nieznany rodzaj zasobu"}, status_code=400)
+        loop = asyncio.get_event_loop()
+        items = await loop.run_in_executor(None, list_custom_assets, kind)
+        return JSONResponse({"items": items})
+
+    @app.post("/api/assets/custom")
+    async def assets_custom_add(req: AddCustomAssetRequest):
+        if req.kind not in ("outro", "sub"):
+            return JSONResponse({"error": "Nieznany rodzaj zasobu"}, status_code=400)
+        loop = asyncio.get_event_loop()
+        try:
+            entry = await loop.run_in_executor(None, add_custom_asset, req.kind, req.source_path)
+        except FileNotFoundError:
+            return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse(entry)
+
     # ── Fast Cutter ────────────────────────────────────────────────────
 
     _CUTTER_MIME = {
@@ -887,6 +1196,27 @@ def create_app(manager: DownloadManager) -> FastAPI:
         ".mkv": "video/x-matroska",
         ".webm": "video/webm",
     }
+
+    _IMAGE_MIME = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }
+
+    @app.get("/api/cutter/asset")
+    async def cutter_asset(path: str):
+        """Serwuje lokalny plik OBRAZU (custom logo) dla nakładki DOM podglądu
+        Fast Cuttera — strona z originem http://127.0.0.1 nie może czytać
+        file:// bezpośrednio. Whitelist rozszerzeń obrazów; wideo ma osobny
+        endpoint ze streamingiem."""
+        ext = os.path.splitext(path)[1].lower()
+        mime = _IMAGE_MIME.get(ext)
+        if not mime:
+            return JSONResponse({"error": "Dozwolone tylko obrazy (png/jpg/webp)"}, status_code=400)
+        if not os.path.isfile(path):
+            return JSONResponse({"error": "Plik nie istnieje"}, status_code=404)
+        return FileResponse(path, media_type=mime, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/cutter/info")
     async def cutter_info(path: str):
@@ -971,7 +1301,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
                                  logo_x: int = 20, logo_y: int = 20,
                                  vol: float = 1.0, sub: int = 0, sub_custom: str = "",
                                  src: str = "", src_size: int = 28,
-                                 src_pos: str = "tl",
+                                 src_pos: str = "tl", src_font: str = "gilroy",
                                  source_x: int = 24, source_y: int = 24):
         """Live-transcode wideo do WebM/VP8+Opus przez pipe ffmpeg.
 
@@ -1004,7 +1334,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
         # Cel: user widzi na żywo jak animacja komponuje się z materiałem;
         # dokładne okna czasowe stosuje dopiero finalny render.
         from cutter import (_bundled_ffmpeg, _default_sub_path,
-                            _drawtext_fontfile, _filter_path_escape)
+                            _font_path, _filter_path_escape)
         sub_file = ""
         if int(sub):
             if sub_custom and os.path.isfile(sub_custom):
@@ -1088,11 +1418,11 @@ def create_app(manager: DownloadManager) -> FastAPI:
                     "bl": f"x={smx}:y=h-th-{smy}",
                     "br": f"x=w-tw-{smx}:y=h-th-{smy}",
                 }[sp]
-                ff = _filter_path_escape(_drawtext_fontfile())
+                ff = _filter_path_escape(_font_path(src_font))
                 fc_parts.append(
                     f"{cur}drawtext=fontfile='{ff}':text='{clean}':"
-                    f"fontcolor=white:fontsize={fsize}:bordercolor=black:"
-                    f"borderw=2:{sxy}[vtxt]")
+                    f"fontcolor=white:fontsize={fsize}:"
+                    f"shadowx=2:shadowy=2:shadowcolor=black:{sxy}[vtxt]")
                 cur = "[vtxt]"
             # format=yuv420p po overlay'ach jest obowiązkowy: RGBA logo /
             # CineForm z alfą negocjują format, którego libvpx nie otwiera
@@ -1259,6 +1589,10 @@ def create_app(manager: DownloadManager) -> FastAPI:
         src_pos: str = "tl"
         src_x: int = 24
         src_y: int = 24
+        src_font: str = "gilroy"
+        # Ustawienia → "Wyłącz animacje interfejsu": pełny tekst od razu,
+        # bez efektu maszyny do pisania.
+        disable_typewriter: bool = False
         outro_src: str = ""
         outro_custom_path: str = ""
         # Overlap outro w sekundach (0–3): overlay z alfą przed końcem filmu
@@ -1308,6 +1642,8 @@ def create_app(manager: DownloadManager) -> FastAPI:
             src_pos=(req.src_pos if req.src_pos in ("tl", "tr", "bl", "br") else "tl"),
             src_x=min(1000, max(0, int(req.src_x))),
             src_y=min(1000, max(0, int(req.src_y))),
+            src_font=(req.src_font if req.src_font in ("gilroy", "arial", "opensans") else "gilroy"),
+            disable_typewriter=bool(req.disable_typewriter),
             outro_src=req.outro_src,
             outro_custom_path=req.outro_custom_path,
             outro_overlap=min(3.0, max(0.0, float(req.outro_overlap or 0.0))),

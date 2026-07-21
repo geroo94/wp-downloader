@@ -130,8 +130,14 @@ echo ""
 echo "=== 6. Strip quarantine + DMG (drag&drop pattern) ==="
 xattr -dr com.apple.quarantine dist/WP_Downloader.app || true
 DMG_STAGING="dist/dmg-staging"
+rm -rf "$DMG_STAGING"
 mkdir -p "$DMG_STAGING"
-cp -R dist/WP_Downloader.app "$DMG_STAGING/"
+# `-c` = clonefile (APFS copy-on-write) — staging copy współdzieli bloki z
+# oryginałem zamiast fizycznie duplikować ~1.5+ GB (.app rośnie z modelami
+# Whisper zaszytymi w paczce). Bez tego build potrafił wyczerpać dysk przy
+# małej ilości wolnego miejsca. Fallback na zwykły `cp -R`, gdyby wolumin
+# nie był APFS (np. sieciowy dysk) i clonefile nie zadziałał.
+cp -Rc dist/WP_Downloader.app "$DMG_STAGING/" 2>/dev/null || cp -R dist/WP_Downloader.app "$DMG_STAGING/"
 ln -s /Applications "$DMG_STAGING/Applications"
 chmod +x "$DMG_STAGING/WP_Downloader.app/Contents/MacOS/WP_Downloader"
 hdiutil create \
@@ -141,19 +147,20 @@ hdiutil create \
     -fs HFS+ \
     dist/WP_Downloader_macOS.dmg
 xattr -dr com.apple.quarantine dist/WP_Downloader_macOS.dmg || true
+rm -rf "$DMG_STAGING"
 
 echo ""
 echo "=== 7. Portable ZIP (bez DMG/instalacji do /Applications) ==="
 # `ditto` (nie `zip -r`) zachowuje resource forks / extended attributes
 # macOS wewnątrz .app bundla — zwykły `zip` je gubi.
 ditto -c -k --sequesterRsrc --keepParent \
-    dist/WP_Downloader.app dist/WP_Downloader_macOS_PORTABLE.zip
+    dist/WP_Downloader.app dist/wp-downloader_PORTABLE.zip
 
 echo ""
 echo "✓ DONE"
 echo "  dist/WP_Downloader.app                    → $(du -sh dist/WP_Downloader.app | cut -f1)"
 echo "  dist/WP_Downloader_macOS.dmg               → $(du -sh dist/WP_Downloader_macOS.dmg | cut -f1)"
-echo "  dist/WP_Downloader_macOS_PORTABLE.zip      → $(du -sh dist/WP_Downloader_macOS_PORTABLE.zip | cut -f1)"
+echo "  dist/wp-downloader_PORTABLE.zip            → $(du -sh dist/wp-downloader_PORTABLE.zip | cut -f1)"
 echo ""
 echo "Aby uruchomić:"
 echo "  open dist/WP_Downloader.app"

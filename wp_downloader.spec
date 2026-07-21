@@ -40,6 +40,23 @@ for _b in _required_bins:
         f"Brak bundlowanej binarki bin/{_b}{_exe_suffix} — zero-dependency wymaga jej "
         f"w paczce (scripts/build_local.sh sekcja 2b / .github/workflows/build.yml)")
 datas += [(_bin_dir, "bin")]
+
+# ── Modele Whisper zaszyte w paczce (offline-ready bez pobierania z sieci) ──
+# tiny.pt (~75 MB) + base.pt (~145 MB) — świadomie NIE cały zestaw (small
+# ~484 MB, medium ~1.5 GB, large-v3 ~3.1 GB rozdęłyby instalator o rząd
+# wielkości). Pobrane z oficjalnego CDN OpenAI, SHA256 zweryfikowany przeciw
+# whisper._MODELS (ten sam hash, którego whisper._download() używa do
+# walidacji cache przy load_model — patrz server._whisper_download_root()).
+# Modele spoza tego zestawu nadal dociągają się on-demand do ~/.cache/whisper
+# jak dotychczas — brak folderu nie jest fatalny, tylko degraduje do
+# poprzedniego (online) zachowania.
+_whisper_models_dir = _os.path.join(_os.path.dirname(SPEC), "assets", "models", "whisper")
+if _os.path.isdir(_whisper_models_dir):
+    datas += [(_whisper_models_dir, _os.path.join("assets", "models", "whisper"))]
+else:
+    print("UWAGA: brak assets/models/whisper — build wyjdzie bez offline-modeli "
+          "(transkrypcja nadal zadziała, ale dociągnie model z sieci przy pierwszym użyciu)")
+
 binaries = []
 hiddenimports = ['uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.asyncio', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on', 'PyQt6.QtWebEngineCore']
 tmp_ret = collect_all('fastapi')
