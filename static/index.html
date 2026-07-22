@@ -1028,7 +1028,7 @@
     .cutter-ov-logo { position: absolute; object-fit: contain; }
     .cutter-ov-src {
       position: absolute; color: #fff; font-weight: 600; line-height: 1.25;
-      text-shadow: 2px 2px 0 rgba(0,0,0,.85); white-space: pre-wrap;
+      text-shadow: 1px 1px 0 rgba(0,0,0,.85); white-space: pre-wrap;
       max-width: 90%;
     }
     /* Gigantyczne logo WP w TLE za boksami aplikacji (watermark).
@@ -1855,7 +1855,7 @@
           </div>
           <div class="brand-slider-row" id="overlap-row">
             <div class="brand-slider-head">
-              <span class="brand-slider-lbl">Delay <span class="brand-slider-hint">0 = całe outro na końcówce materiału, wyżej = wystaje za koniec</span></span>
+              <span class="brand-slider-lbl">Delay <span class="brand-slider-hint">0 = outro w całości doklejone (materiał bez zmian), wyżej = tyle sekund outro nachodzi na koniec materiału</span></span>
               <span class="brand-slider-val" id="outro-overlap-val">0.0 s</span>
             </div>
             <input id="outro-overlap" class="brand-slider" type="range" min="0" max="3" step="0.1" value="0"
@@ -2186,6 +2186,7 @@
       <div style="display:flex;gap:8px">
         <button class="btn-about-link" onclick="refreshLogs()">Odśwież</button>
         <button class="btn-about-link" onclick="copyLogs()">Kopiuj</button>
+        <button class="btn-about-link" onclick="openLogFile()">Otwórz plik logu</button>
         <button class="btn-about-link" onclick="document.getElementById('log-modal').style.display='none'">✕ Zamknij</button>
       </div>
     </div>
@@ -3348,7 +3349,38 @@
 
   function copyLogs() {
     const ta = document.getElementById('log-content');
-    navigator.clipboard.writeText(ta.value).then(() => showToast('Skopiowano logi!'));
+    const text = ta.value;
+    // Fallback do zaznaczenia + execCommand('copy'): w QWebEngineView (Qt)
+    // navigator.clipboard.writeText potrafi cicho odrzucić Promise (brak
+    // uprawnień/focusu w embedded webview) — bez .catch tu nic się wtedy
+    // nie działo, przycisk "Kopiuj" wyglądał na martwy.
+    const fallbackCopy = () => {
+      try {
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        if (document.execCommand('copy')) showToast('Skopiowano logi!');
+        else showToast('Nie udało się skopiować logów', true);
+      } catch {
+        showToast('Nie udało się skopiować logów', true);
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => showToast('Skopiowano logi!'),
+        fallbackCopy,
+      );
+    } else {
+      fallbackCopy();
+    }
+  }
+
+  async function openLogFile() {
+    const r = await fetch('/api/logs/reveal', { method: 'POST' });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      showToast(e.error || 'Nie można otworzyć pliku logu', true);
+    }
   }
 
   function refreshLogs() { showLogs(); }

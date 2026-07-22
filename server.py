@@ -514,6 +514,69 @@ async def _kill_cutter_live_proc(session: str) -> None:
             pass
 
 
+def _reveal_path_in_os(path: str) -> JSONResponse:
+    """Otwiera lokalizację `path` w Finderze (macOS) / Eksploratorze (Windows)
+    z plikiem **zaznaczonym**. Jeżeli plik zniknął (np. usunięty albo ścieżka
+    się zmieniła), otwiera sam folder zamiast wysyłać `open -R`/`/select,` na
+    nieistniejący plik. Współdzielone przez /api/tasks/{id}/reveal (Procesy)
+    i /api/logs/reveal (przycisk "Otwórz plik logu" w oknie Logów)."""
+    file_exists = os.path.exists(path)
+    parent = os.path.dirname(path)
+    fallback = False
+    try:
+        if file_exists:
+            if sys.platform == "darwin":
+                cmd = ["open", "-R", path]
+            elif sys.platform == "win32":
+                # explorer.exe ma WŁASNY, niestandardowy parser command
+                # line'a dla `/select,` — wymaga cudzysłowu DOKŁADNIE
+                # wokół ścieżki ( /select,"C:\...\plik.mp4" ), nie wokół
+                # całego tokenu ze switchem. Lista argumentów idzie przez
+                # list2cmdline(), który cudzysłowi CAŁY element
+                # "/select,ścieżka" naraz, gdy ścieżka ma spację — Explorer
+                # wtedy nie rozpoznaje /select i otwiera tylko folder bez
+                # zaznaczenia pliku.
+                # Naprawa: budujemy command line ręcznie i przekazujemy go
+                # jako STRING (nie listę). Na Windows subprocess.Popen
+                # z args=str i shell=False wysyła ten string DOSŁOWNIE do
+                # CreateProcess (zweryfikowane w CPythonie: _execute_child
+                # robi `if isinstance(args, str): pass` — zero przetwarzania) —
+                # więc cudzysłów ląduje dokładnie tam, gdzie oczekuje
+                # Explorer, BEZ pośrednictwa cmd.exe/shell=True (a więc też
+                # bez ryzyka wstrzyknięcia znaków specjalnych powłoki).
+                win_path = os.path.normpath(path)
+                subprocess.Popen(f'explorer /select,"{win_path}"')
+                cmd = None
+            else:
+                cmd = ["xdg-open", parent or path]
+        else:
+            fallback = True
+            target_dir = parent if (parent and os.path.isdir(parent)) else None
+            if not target_dir:
+                return JSONResponse(
+                    {"error": "Plik nie istnieje, folder też nie."},
+                    status_code=404,
+                )
+            if sys.platform == "darwin":
+                cmd = ["open", target_dir]
+            elif sys.platform == "win32":
+                # Sam folder (bez selekcji pliku) — os.startfile() jest
+                # natywnym Windows API (ShellExecute), bez pośredniego
+                # subprocess/explorer.exe: szybsze i odporne na przyszłe
+                # zmiany w sposobie wywoływania explorer.exe z argv.
+                os.startfile(os.path.normpath(target_dir))  # type: ignore[attr-defined]
+                cmd = None
+            else:
+                cmd = ["xdg-open", target_dir]
+        if cmd is not None:
+            subprocess.Popen(cmd)
+        logger.info("reveal: cmd=%r exists=%s fallback=%s", cmd, file_exists, fallback)
+        return JSONResponse({"ok": True, "fallback": "directory_only" if fallback else None})
+    except Exception as e:
+        logger.warning("reveal: subprocess failed: %s (path=%r)", e, path)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 class OBSConnectRequest(BaseModel):
     host: str = "localhost"
     port: int = 4455
@@ -1138,50 +1201,19 @@ def create_app(manager: DownloadManager) -> FastAPI:
         path = (task.output_path or "").strip()
         if not path:
             return JSONResponse({"error": "Brak ścieżki pliku"}, status_code=404)
+        return _reveal_path_in_os(path)
 
-        file_exists = os.path.exists(path)
-        parent = os.path.dirname(path)
-        fallback = False
-        try:
-            if file_exists:
-                if sys.platform == "darwin":
-                    cmd = ["open", "-R", path]
-                elif sys.platform == "win32":
-                    # explorer.exe wymaga `/select,PATH` jako JEDEN argument
-                    # (bez spacji między przecinkiem a ścieżką) + ścieżki z
-                    # backslashami. PyInstaller/yt-dlp trzymają forward slashes
-                    # w outtmpl, więc bez normpath() explorer odmawia (otwiera
-                    # tylko folder bez selekcji albo nic).
-                    win_path = os.path.normpath(path)
-                    cmd = ["explorer", f"/select,{win_path}"]
-                else:
-                    cmd = ["xdg-open", parent or path]
-            else:
-                fallback = True
-                target_dir = parent if (parent and os.path.isdir(parent)) else None
-                if not target_dir:
-                    return JSONResponse(
-                        {"error": "Plik nie istnieje, folder też nie."},
-                        status_code=404,
-                    )
-                if sys.platform == "darwin":
-                    cmd = ["open", target_dir]
-                elif sys.platform == "win32":
-                    # Sam folder (bez selekcji pliku) — os.startfile() jest
-                    # natywnym Windows API (ShellExecute), bez pośredniego
-                    # subprocess/explorer.exe: szybsze i odporne na przyszłe
-                    # zmiany w sposobie wywoływania explorer.exe z argv.
-                    os.startfile(os.path.normpath(target_dir))  # type: ignore[attr-defined]
-                    cmd = None
-                else:
-                    cmd = ["xdg-open", target_dir]
-            if cmd is not None:
-                subprocess.Popen(cmd)
-            logger.info("reveal: cmd=%r exists=%s fallback=%s", cmd, file_exists, fallback)
-            return JSONResponse({"ok": True, "fallback": "directory_only" if fallback else None})
-        except Exception as e:
-            logger.warning("reveal: subprocess failed: %s (path=%r)", e, path)
-            return JSONResponse({"error": str(e)}, status_code=500)
+    @app.post("/api/logs/reveal")
+    async def reveal_log_file():
+        """Przycisk "Otwórz plik logu" w oknie Logów (Ustawienia) — pokazuje
+        bieżący plik .log aplikacji w Finderze/Eksploratorze, zaznaczony."""
+        log_path = os.environ.get("WP_DOWNLOADER_LOG_PATH", "")
+        if not log_path:
+            return JSONResponse(
+                {"error": "Brak ścieżki pliku logu (tryb deweloperski?)"},
+                status_code=404,
+            )
+        return _reveal_path_in_os(log_path)
 
     # ── Zasoby trwałe (Outro/Sub) — patrz assets_manager.py ─────────────
 

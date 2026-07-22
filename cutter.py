@@ -446,17 +446,29 @@ class CutterManager:
         ref_scale = min(main_w, main_h) / 1080.0
 
         # ── Timing warstwy Outro (compositing, nie doklejanie) ──────────
-        # Formuła: outro_start = dur - od + delay. Delay=0 → CAŁE outro
-        # nałożone na końcówkę materiału (kończy się razem z nim); delay=od
-        # → outro w całości za końcem (czyste doklejenie). Ogon wystający
-        # za koniec materiału (tail) = delay, dokładany czarną dokładką.
+        # Formuła: outro_start = dur - overlap. Outro NIGDY nie ucina ani nie
+        # zastępuje końcówki materiału na 1:1 — zawsze WYDŁUŻA całość o
+        # (od - overlap). overlap=0 → outro w całości za końcem (czyste
+        # doklejenie, materiał leci nietknięty do samego dur, total = dur+od).
+        # overlap=od → outro w całości nałożone na końcówkę materiału (total
+        # = dur, zero wydłużenia — skrajny przypadek przy overlap zbliżonym
+        # do długości outra). Ogon wystający za koniec materiału (tail) =
+        # od - overlap, dokładany czarną dokładką.
+        #
+        # UWAGA (poprzedni bug): formuła `dur - od + delay` miała odwróconą
+        # biegunowość — przy małym "delay" (np. 0.5 s, myślane jako subtelne
+        # zachodzenie) outro realnie ZASTĘPOWAŁO/nachodziło na (od-delay)
+        # sekund materiału (np. 4.5 z 5 s outra), bo delay działał jak "o ile
+        # outro WYSTAJE poza dur", a nie "o ile NACHODZI na dur". Ten sam
+        # UI-owy suwak (0–3 s, patrz _overlap_value) teraz czytany jest
+        # WPROST jako overlap: dur - overlap, bez odejmowania od.
         od = ov = 0.0
         outro_start = dur
         outro_tail = 0.0
         if outro:
             od = max(0.1, float((outro_meta or {}).get("duration") or 5.0))
             ov = self._overlap_value(job, dur, od)
-            outro_start = max(0.0, dur - od + ov)
+            outro_start = max(0.0, dur - ov)
             outro_tail = max(0.0, (outro_start + od) - dur)
 
         # Okna czasowe animacji subskrypcji: [0, sd] na starcie wycinka oraz
@@ -597,7 +609,7 @@ class CutterManager:
                 fg.append(
                     f"{base_v}drawtext=fontfile='{fontfile}':text='{safe_full}':"
                     f"fontcolor=white:fontsize={fontsize}:"
-                    f"shadowx=2:shadowy=2:shadowcolor=black:"
+                    f"shadowx=1:shadowy=1:shadowcolor=black:"
                     f"{pos_xy}[v2]"
                 )
                 base_v = "[v2]"
@@ -633,7 +645,7 @@ class CutterManager:
                     f"{base_v}sendcmd=f='{_filter_path_escape(sendcmd_path)}',"
                     f"drawtext@src=fontfile='{fontfile}':text='':"
                     f"fontcolor=white:fontsize={fontsize}:"
-                    f"shadowx=2:shadowy=2:shadowcolor=black:"
+                    f"shadowx=1:shadowy=1:shadowcolor=black:"
                     f"{pos_xy}[v2]"
                 )
                 base_v = "[v2]"
@@ -682,14 +694,15 @@ class CutterManager:
             outro_a_src = (f"[{outro_silence_idx}:a]" if outro_silence_idx >= 0
                            else f"[{outro_idx}:a]")
             # ── Outro = ZAWSZE warstwa compositingu (overlay z alfą), nigdy
-            # doklejenie concat'em. Timing z formuły outro_start = dur-od+delay
-            # (patrz komentarz przy wyliczeniu na górze): delay=0 → całe outro
-            # nałożone na końcówkę materiału, delay=od → czyste doklejenie.
-            # Maska alfa na początku .mov przepuszcza główny materiał pod
-            # spodem; NIE xfade/crossfade (rozmywa zamiast komponować).
+            # doklejenie concat'em. Timing z formuły outro_start = dur-overlap
+            # (patrz komentarz przy wyliczeniu na górze): overlap=0 → czyste
+            # doklejenie (materiał nietknięty do dur), overlap=od → całe outro
+            # nałożone na końcówkę materiału. Maska alfa na początku .mov
+            # przepuszcza główny materiał pod spodem; NIE xfade/crossfade
+            # (rozmywa zamiast komponować).
             #
             # Struktura (wzorzec identyczny ze sprawdzonym overlayem SUB):
-            #   1. [main] (+ czarna dokładka długości ogona, gdy delay > 0)
+            #   1. [main] (+ czarna dokładka długości ogona, gdy tail > 0)
             #      --concat--> [vbase]   (tpad milczkiem nie dokleja klatek
             #      na -ss/-t inpucie — stąd concat z lavfi color)
             #   2. [outro] setpts +outro_start, pad color=black@0.0,
