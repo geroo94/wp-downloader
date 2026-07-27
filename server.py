@@ -30,11 +30,17 @@ from pydantic import BaseModel
 import sys
 import os
 
-from assets_manager import add_custom_asset, list_custom_assets
+from assets_manager import (
+    add_custom_asset,
+    list_custom_assets,
+    get_whisper_device_pref,
+    set_whisper_device_pref,
+)
 from binaries import get_ffmpeg, get_ffprobe, subprocess_flags
 from cutter import CutterJob, CutterManager
 from download_manager import DownloadManager
 from environment_manager import collect_system_info
+import whisper_device
 from obs_controller import OBSController
 from streamlink_proxy import StreamlinkProxy
 from queue_manager import QueueManager
@@ -311,11 +317,20 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
             else:
                 ssl._create_default_https_context = _create_unverified_https_context
 
-            model = whisper.load_model(model_size, download_root=_whisper_download_root(model_size))
+            # Tryb obliczeń (Ustawienia → Tryb obliczeń Whisper): auto = najlepszy
+            # dostępny sprzęt (CUDA > MPS > CPU), gpu = wymuszony z bezpiecznym
+            # fallbackiem na CPU gdy brak GPU, cpu = zawsze CPU. device= przekazane
+            # jawnie do load_model — bez tego whisper sam wybiera WYŁĄCZNIE między
+            # cuda/cpu (nie wie o MPS), więc na Apple Silicon zawsze lądował na CPU.
+            device, device_label, fp16 = whisper_device.resolve_device(get_whisper_device_pref())
+            logger.info("Transkrypcja: urządzenie=%s (%s), fp16=%s", device, device_label, fp16)
+            model = whisper.load_model(
+                model_size, device=device, download_root=_whisper_download_root(model_size))
             # Parametry zoptymalizowane pod jakość transkrypcji polskiej:
             # - task="transcribe" (nie "translate" które zamienia na angielski)
             # - language="pl" (lub user-selected) — explicit, bez auto-detect halucynacji
-            # - fp16=False — wymusza float32 (CPU friendly; fp16 na CPU bywa unstable)
+            # - fp16 — True TYLKO na CUDA (patrz whisper_device.resolve_device);
+            #   float32 na CPU i MPS (fp16 tam niestabilne/częściowo wspierane)
             # - condition_on_previous_text=False — KLUCZOWE: domyślnie Whisper
             #   "pamięta" poprzedni segment do kondycjonowania kolejnego, co bardzo
             #   często wpada w pętlę halucynacji ("powtarza dziwne frazy"). Wyłączone
@@ -327,7 +342,7 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
             # - initial_prompt — sterowanie modelem na polskie diakrytyki.
             kwargs = {
                 "task": "transcribe",
-                "fp16": False,
+                "fp16": fp16,
                 "condition_on_previous_text": False,
                 "beam_size": 5,
                 "temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
@@ -374,6 +389,19 @@ async def _run_transcription(manager: DownloadManager, task_id: str, video_path:
                 result = model.transcribe(video_path, **kwargs)
             finally:
                 _wt.tqdm.tqdm = _orig_tqdm
+                # Zwolnienie pamięci GPU/MPS między transkrypcjami: `model`
+                # jest lokalną zmienną, więc Python GC w końcu ją zbierze,
+                # ale allocator PyTorch cache'ujący pamięć CUDA/MPS trzyma
+                # zwolnione bloki WE WŁASNEJ puli (widoczne w nvidia-smi jako
+                # "used" nawet po zniknięciu referencji Pythona) — przy wielu
+                # transkrypcjach pod rząd bez jawnego czyszczenia footprint
+                # procesu na GPU potrafi rosnąć (fragmentacja). del + empty_
+                # cache oddaje ją z powrotem między wywołaniami. Na CPU to
+                # no-op (żadnej puli GPU do czyszczenia).
+                del model
+                if device in ("cuda", "mps"):
+                    import torch
+                    (torch.cuda if device == "cuda" else torch.mps).empty_cache()
             segments = result.get("segments", [])
             lines = []
             for seg in segments:
@@ -577,6 +605,15 @@ def _reveal_path_in_os(path: str) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+async def _whisper_status_response() -> JSONResponse:
+    """Snapshot {pref, device, label, fp16, hardware} do odpowiedzi na GET/POST
+    /api/settings/whisper-device — współdzielone, bo oba endpointy zwracają
+    dokładnie to samo po (nie)zmianie preferencji."""
+    loop = asyncio.get_event_loop()
+    status = await loop.run_in_executor(None, whisper_device.current_status)
+    return JSONResponse(status)
+
+
 class OBSConnectRequest(BaseModel):
     host: str = "localhost"
     port: int = 4455
@@ -706,6 +743,25 @@ def create_app(manager: DownloadManager) -> FastAPI:
             return PlainTextResponse(f"(plik logu nie istnieje: {log_path})")
         except Exception as e:
             return PlainTextResponse(f"(błąd odczytu: {e})")
+
+    @app.get("/api/settings/whisper-device")
+    async def get_whisper_device_setting():
+        """Stan dropdownu "Tryb obliczeń Whisper" (zakładka Transkrypcja/
+        Ustawienia): zapisana preferencja + faktycznie aktywne urządzenie."""
+        return await _whisper_status_response()
+
+    class WhisperDeviceRequest(BaseModel):
+        value: str  # "auto" | "gpu" | "cpu"
+
+    @app.post("/api/settings/whisper-device")
+    async def set_whisper_device_setting(req: WhisperDeviceRequest):
+        """Zapisuje wybór z dropdownu i zwraca odświeżony status (żeby UI od
+        razu pokazał nowe "Aktywne urządzenie: ..." bez osobnego GET)."""
+        try:
+            set_whisper_device_pref(req.value)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return await _whisper_status_response()
 
     # ── m3u8 auto-detection ───────────────────────────────────────────────
 

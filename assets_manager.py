@@ -55,16 +55,26 @@ def _config_path() -> str:
 
 
 def _load_config() -> dict:
+    """Wczytuje config.json, naprawiając TYLKO brakujący/uszkodzony klucz
+    "custom_assets" zamiast resetować cały plik — inne klucze (np.
+    "whisper_device") mają przetrwać nawet gdy akurat ten jeden jest
+    nieprawidłowy. Kolejne klucze dopisywane w przyszłości powinny łatać się
+    tym samym wzorcem (per-klucz), nie kolejnym `return {...}` na sztywno."""
+    data: dict = {}
     p = _config_path()
     if os.path.isfile(p):
         try:
             with open(p, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict) and isinstance(data.get("custom_assets"), dict):
-                return data
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                data = loaded
         except (OSError, json.JSONDecodeError) as exc:
-            logger.warning("assets_manager: config.json nieczytelny (%s) — reset do pustego", exc)
-    return {"custom_assets": {"outro": [], "sub": []}}
+            logger.warning("assets_manager: config.json nieczytelny (%s) — używam wartości domyślnych", exc)
+    if not isinstance(data.get("custom_assets"), dict):
+        data["custom_assets"] = {}
+    data["custom_assets"].setdefault("outro", [])
+    data["custom_assets"].setdefault("sub", [])
+    return data
 
 
 def _save_config(cfg: dict) -> None:
@@ -113,6 +123,26 @@ def add_custom_asset(kind: str, source_path: str) -> dict:
     _save_config(cfg)
     logger.info("assets_manager: dodano %s custom asset '%s' -> %s", kind, base_name, dest_path)
     return entry
+
+
+_VALID_WHISPER_DEVICES = ("auto", "gpu", "cpu")
+
+
+def get_whisper_device_pref() -> str:
+    """Zapisana preferencja trybu obliczeń Whisper: "auto" (domyślny — najlepszy
+    dostępny sprzęt) | "gpu" (wymuś CUDA/MPS) | "cpu" (wymuś CPU)."""
+    cfg = _load_config()
+    v = cfg.get("whisper_device", "auto")
+    return v if v in _VALID_WHISPER_DEVICES else "auto"
+
+
+def set_whisper_device_pref(value: str) -> None:
+    """Zapisuje wybór z dropdownu "Tryb obliczeń Whisper" w Ustawieniach."""
+    if value not in _VALID_WHISPER_DEVICES:
+        raise ValueError(f"Nieprawidłowa wartość whisper_device: {value!r}")
+    cfg = _load_config()
+    cfg["whisper_device"] = value
+    _save_config(cfg)
 
 
 def clear_all_custom_assets() -> int:

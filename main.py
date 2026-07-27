@@ -25,12 +25,8 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
-import subprocess
-import threading
 import logging
 from PyQt6.QtWidgets import QMessageBox, QApplication
-from PyQt6.QtGui import QPixmap
-from PyQt6.QtCore import Qt
 
 _single_instance_socket = None
 
@@ -238,7 +234,6 @@ if __name__ == "__main__":
         # the same EXE binary with --type=<kind> arguments. Intercept them before
         # any app-level setup so they don't spam the log or rebind the server port.
         if any(a.startswith("--type=") for a in sys.argv[1:]):
-            from PyQt6.QtWidgets import QApplication
             sys.exit(QApplication(sys.argv).exec())
 
         # Guard 2: pip/yt-dlp subprocess invocations spawned by perform_system_update.
@@ -307,8 +302,12 @@ if __name__ == "__main__":
 
         # 2. Inicjalizacja GUI z łapaniem błędów binarnych
         logging.info("Ładowanie modułów QtWebEngine...")
-        from PyQt6 import QtWebEngineWidgets
-        
+        # Import celowo bez użycia nazwy (linter/pyflakes zgłosi "unused") —
+        # sam import ma efekt uboczny: rejestruje WebEngine w Qt PRZED
+        # utworzeniem QApplication. Bez tego importu w tym miejscu render
+        # webview nie inicjalizuje się poprawnie.
+        from PyQt6 import QtWebEngineWidgets  # noqa: F401
+
         logging.info("Inicjalizacja QApplication...")
         app_instance = QApplication(sys.argv)
         app_instance.setApplicationName("WP Downloader")

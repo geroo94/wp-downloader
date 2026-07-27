@@ -160,12 +160,29 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             dist/WP_Downloader.app dist/WP_Downloader_macOS_PORTABLE.zip
 
+      # WP Environment Checker: osobna, lekka apka (Tkinter, zero zależności
+      # poza stdlibem) — "Krok 0" diagnozy środowiska przed instalacją
+      # głównej apki. Świadomie NIE przez wp_downloader.spec (PyQt6/torch),
+      # żeby zostać mały (kilka MB zamiast >1 GB).
+      - name: Build WP Environment Checker
+        run: |
+          # Bez --onefile: PyInstaller ostrzega, że onefile+windowed nie ma
+          # sensu dla .app bundli na macOS (od v7.0 to twardy błąd) — onedir
+          # (domyślny) i tak daje jeden plik .app w Finderze.
+          pyinstaller --windowed --name WP_Environment_Checker \
+            --icon "$(pwd)/static/wp_logo.png" --noconfirm tools/env_checker.py
+          codesign --force --deep --sign - dist/WP_Environment_Checker.app
+          xattr -dr com.apple.quarantine dist/WP_Environment_Checker.app || true
+          ditto -c -k --sequesterRsrc --keepParent \
+            dist/WP_Environment_Checker.app dist/WP_Environment_Checker_macOS.zip
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/WP_Downloader_macOS.dmg
             dist/WP_Downloader_macOS_PORTABLE.zip
+            dist/WP_Environment_Checker_macOS.zip
           generate_release_notes: true
           name: WP Downloader ${{ github.ref_name }}
           fail_on_unmatched_files: true
@@ -256,12 +273,22 @@ jobs:
         run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build\installer.iss'
         shell: cmd
 
+      # WP Environment Checker: osobna, lekka apka (Tkinter, zero zależności
+      # poza stdlibem) — "Krok 0" diagnozy środowiska przed instalacją
+      # głównej apki. Świadomie NIE przez wp_downloader.spec (PyQt6/torch),
+      # żeby zostać mały (kilka MB zamiast setek MB).
+      - name: Build WP Environment Checker
+        run: |
+          pyinstaller --onefile --windowed --name WP_Environment_Checker `
+            --icon static\wp_logo.ico --noconfirm tools\env_checker.py
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/WP_Downloader_Windows.zip
             Output/WP_Downloader_Setup.exe
+            dist/WP_Environment_Checker.exe
           generate_release_notes: true
           name: WP Downloader ${{ github.ref_name }}
           fail_on_unmatched_files: true

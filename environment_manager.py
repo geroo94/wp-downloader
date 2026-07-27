@@ -6,8 +6,7 @@ Uruchamia lekkie zapytania do procesów systemowych; wyniki można cache'ować n
 
 from __future__ import annotations
 
-import shutil
-import subprocess 
+import subprocess
 import sys
 import os
 import re

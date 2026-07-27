@@ -842,6 +842,15 @@
     @media (max-width: 700px) { .transcribe-bar { grid-template-columns: 1fr; gap: 14px; } }
     .transcribe-bar-col { display: flex; flex-direction: column; gap: 8px; }
     .transcribe-bar-col .cutter-select { width: 100%; }
+    .transcribe-device-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      margin-bottom: 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border);
+    }
+    .transcribe-device-row .cutter-select { width: 220px; flex-shrink: 0; }
+    @media (max-width: 700px) {
+      .transcribe-device-row { flex-direction: column; align-items: stretch; }
+      .transcribe-device-row .cutter-select { width: 100%; }
+    }
     .cutter-left, .cutter-right { display: flex; flex-direction: column; gap: 14px; }
     .cutter-dropzone {
       border: 2px dashed var(--border); border-radius: 12px;
@@ -1934,6 +1943,24 @@
             <option value="large-v3">Large-v3 (najdokładniejszy)</option>
           </select>
         </div>
+      </div>
+
+      <!-- Tryb obliczeń Whisper: auto (najlepszy dostępny sprzęt) / wymuś
+           GPU (CUDA/MPS) / wymuś CPU. Zapisywane w config.json (backend),
+           nie w localStorage — to systemowa preferencja sprzętowa, nie
+           preferencja UI. Status pokazuje faktycznie aktywne urządzenie,
+           łącznie z bezpiecznym fallbackiem gdy "Wymuś GPU" wybrano na
+           maszynie bez CUDA/MPS. -->
+      <div class="transcribe-device-row" id="transcribe-device-row">
+        <div class="setting-meta">
+          <div class="setting-name">Tryb obliczeń Whisper</div>
+          <div class="setting-desc" id="whisper-device-status">Aktywne urządzenie: sprawdzanie…</div>
+        </div>
+        <select id="whisper-device-select" class="cutter-select">
+          <option value="auto" selected>Automatyczny</option>
+          <option value="gpu">Wymuś GPU (CUDA/MPS)</option>
+          <option value="cpu">Wymuś CPU</option>
+        </select>
       </div>
 
       <!-- Strefa Drag&Drop + wynik — pełna szerokość pod paskiem ustawień. -->
@@ -3915,10 +3942,50 @@
     document.addEventListener('DOMContentLoaded', () => {
       initAccordions();
       positionTabIndicator();
+      initWhisperDeviceSetting();
     });
   } else {
     initAccordions();
     positionTabIndicator();
+    initWhisperDeviceSetting();
+  }
+
+  // ── Tryb obliczeń Whisper (CPU/GPU) ──────────────────────────────────
+  // Preferencja żyje w config.json po stronie backendu (nie localStorage —
+  // to ustawienie sprzętowe, nie UI), więc GET przy starcie + POST na zmianę.
+  function _applyWhisperDeviceStatus(d) {
+    const sel = document.getElementById('whisper-device-select');
+    const status = document.getElementById('whisper-device-status');
+    if (sel && d.pref) sel.value = d.pref;
+    if (status) status.textContent = 'Aktywne urządzenie: ' + (d.label || '?');
+  }
+
+  async function initWhisperDeviceSetting() {
+    const sel = document.getElementById('whisper-device-select');
+    if (!sel) return;
+    try {
+      const r = await fetch('/api/settings/whisper-device');
+      if (r.ok) _applyWhisperDeviceStatus(await r.json());
+    } catch {
+      const status = document.getElementById('whisper-device-status');
+      if (status) status.textContent = 'Aktywne urządzenie: nie udało się sprawdzić';
+    }
+    sel.addEventListener('change', async () => {
+      const status = document.getElementById('whisper-device-status');
+      if (status) status.textContent = 'Aktywne urządzenie: sprawdzanie…';
+      try {
+        const r = await fetch('/api/settings/whisper-device', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: sel.value }),
+        });
+        const d = await r.json();
+        if (!r.ok) { showToast(d.error || 'Nie udało się zapisać trybu obliczeń', true); return; }
+        _applyWhisperDeviceStatus(d);
+      } catch {
+        showToast('Błąd połączenia z serwerem', true);
+      }
+    });
   }
 
   // ── Fast Cutter ─────────────────────────────────────────────────────

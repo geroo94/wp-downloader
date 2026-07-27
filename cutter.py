@@ -21,7 +21,6 @@ import logging
 import os
 import re
 import sys
-import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -716,7 +715,7 @@ class CutterManager:
             if black_idx >= 0:
                 fg.append(f"{base_v}fps={fps_s}[vmaincfr]")
                 fg.append(f"[{black_idx}:v]setsar=1,format=yuv420p[vblack]")
-                fg.append(f"[vmaincfr][vblack]concat=n=2:v=1:a=0[vbase]")
+                fg.append("[vmaincfr][vblack]concat=n=2:v=1:a=0[vbase]")
                 vbase = "[vbase]"
             else:
                 vbase = base_v
@@ -740,7 +739,7 @@ class CutterManager:
             fg.append(f"{base_a}afade=t=out:st={fade_st:.3f}:d=0.5[amfade]")
             fg.append(f"{outro_a_src}asetpts=PTS-STARTPTS,{afmt},"
                       f"adelay={int(outro_start * 1000)}:all=1[aoutro]")
-            fg.append(f"[amfade][aoutro]amix=inputs=2:duration=longest:normalize=0[afinal]")
+            fg.append("[amfade][aoutro]amix=inputs=2:duration=longest:normalize=0[afinal]")
             v_map, a_map = "[vfinal]", "[afinal]"
         else:
             v_map, a_map = base_v, base_a
@@ -816,12 +815,15 @@ class CutterManager:
             sub_meta = await self._probe_media(sub_path) if sub_path else None
             if outro_meta:
                 # Outro wydłuża output o ogon wystający za koniec materiału
-                # (formuła compositingu: outro_start = dur - od + delay,
-                # tail = delay dla typowych długości) — bez tego progress
-                # bar zatrzymałby się przed 100% do końca renderu.
+                # (formuła compositingu: outro_start = dur - overlap, patrz
+                # wyliczenie w _cmd_branded) — bez tego progress bar
+                # zatrzymałby się przed 100% do końca renderu. MUSI być ta
+                # sama formuła co w _cmd_branded, inaczej total_dur tu
+                # (użyty do % postępu) rozjeżdża się z faktyczną długością
+                # renderu.
                 od = max(0.1, float(outro_meta.get("duration") or 5.0))
                 ov = self._overlap_value(job, total_dur, od)
-                o_start = max(0.0, total_dur - od + ov)
+                o_start = max(0.0, total_dur - ov)
                 total_dur += max(0.0, (o_start + od) - total_dur)
             cmds = [self._cmd_branded(job, meta, outro_meta, sub_meta, force_sw)]
             if not force_sw:
