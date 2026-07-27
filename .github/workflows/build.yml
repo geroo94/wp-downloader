@@ -266,6 +266,16 @@ jobs:
       # SmartScreen wciąż ostrzega na pierwszym uruchomieniu (brak EV cert),
       # ale logi siedzą już w %APPDATA%\WP_Downloader\logs\ — install dir
       # może być read-only.
+      # Opcjonalny prerequisite instalatora (patrz komentarz w installer.iss):
+      # dołączany warunkowo (external + skipifsourcedoesntexist) — jeśli to
+      # pobieranie kiedyś zawiedzie, ISCC i tak się skompiluje, po prostu bez
+      # tego kroku w instalatorze.
+      - name: Fetch VC++ Redistributable (optional installer prerequisite)
+        run: |
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" `
+            -OutFile build\vc_redist.x64.exe
+        continue-on-error: true
+
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 

@@ -9,6 +9,26 @@
 ;     "Więcej informacji → Uruchom mimo to" hash trafia do reputation cache
 ;     i kolejne uruchomienia są ciche.
 ;   • Build runuje w CI z `dist/WP_Downloader/` jako źródłem.
+;
+;  VC++ Redistributable (opcjonalny prerequisite, patrz [Code] niżej):
+;   • Instalowany TYLKO gdy faktycznie brakuje (sonda rejestru) — większość
+;     Windows 10/11 już go ma z Windows Update, więc krok zwykle jest no-op.
+;   • Sam ten JEDEN krok wymaga elevacji (WinSxS/System32 — nieodłączna
+;     właściwość VC++ Redist, nie do obejścia) — ShellExec('runas', ...)
+;     każe WINDOWSOWI pokazać jego WŁASNY, widoczny prompt UAC tylko dla
+;     tego kroku. Reszta instalatora (PrivilegesRequired=lowest) zostaje
+;     w pełni bez adminarights — nic się tu nie zmienia w tym względzie.
+;   • Plik vc_redist.x64.exe jest dołączany WARUNKOWO (external +
+;     skipifsourcedoesntexist) — jeśli CI/build lokalny go nie pobrał do
+;     build\vc_redist.x64.exe, krok cicho się pomija (bez błędu kompilacji
+;     .iss), a user i tak może dociągnąć go później przez WP Environment
+;     Checker → "Instaluj brakujące komponenty".
+;
+;  Node.js CELOWO nie jest tu bundlowany jako obowiązkowy prerequisite:
+;   aplikacja używa WŁASNEGO, dołączonego Deno do JS Challenge YouTube
+;   (patrz yt_dlp_worker.py:_detect_js_runtime) — Node.js nie jest wymagany
+;   do działania. Dostępny jako czysto opcjonalna instalacja przez
+;   WP Environment Checker, dla userów którzy z innych powodów go chcą.
 ; ─────────────────────────────────────────────────────────────────────────────
 
 #define MyAppName "WP Downloader"
@@ -50,6 +70,10 @@ Name: "desktopicon"; Description: "Utwórz skrót na pulpicie"; GroupDescription
 
 [Files]
 Source: "..\dist\WP_Downloader\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Dołączany WARUNKOWO (patrz komentarz przy [Setup] wyżej) — dontcopy: NIE
+; trafia do {app}, tylko do wewnętrznego payloadu instalatora, wyciągany na
+; żądanie w [Code] TYLKO jeśli VC++ Redist faktycznie brakuje w systemie.
+Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: dontcopy external skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -58,3 +82,47 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Uruchom {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function IsVCRedistInstalled(): Boolean;
+var
+  Installed: Cardinal;
+begin
+  Result := RegQueryDWordValue(HKLM64,
+    'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64', 'Installed', Installed)
+    and (Installed = 1);
+end;
+
+procedure InstallVCRedistIfMissing();
+var
+  ResultCode: Integer;
+  TmpFile: String;
+begin
+  if IsVCRedistInstalled() then
+  begin
+    Log('VC++ Redistributable: już zainstalowany, pomijam.');
+    Exit;
+  end;
+  TmpFile := ExpandConstant('{tmp}\vc_redist.x64.exe');
+  try
+    ExtractTemporaryFile('vc_redist.x64.exe');
+  except
+    Log('VC++ Redistributable: brak dołączonego instalatora w tym buildzie — pomijam ' +
+        '(WP Environment Checker → "Instaluj brakujące komponenty" dociągnie go później).');
+    Exit;
+  end;
+  // 'runas': WŁASNY, oddzielny prompt UAC TYLKO dla tego kroku — reszta
+  // instalatora (PrivilegesRequired=lowest, patrz [Setup]) zostaje bez
+  // adminarights, zgodnie z pierwotnym zamysłem dla laptopów firmowych.
+  if ShellExec('runas', TmpFile, '/install /quiet /norestart', '',
+               SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    Log('VC++ Redistributable: instalator uruchomiony, kod wyjścia=' + IntToStr(ResultCode))
+  else
+    Log('VC++ Redistributable: nie udało się uruchomić instalatora (UAC odrzucone?).');
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    InstallVCRedistIfMissing();
+end;
