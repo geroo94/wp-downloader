@@ -183,7 +183,7 @@ jobs:
             dist/WP_Downloader_macOS.dmg
             dist/WP_Downloader_macOS_PORTABLE.zip
             dist/WP_Environment_Checker_macOS.zip
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           name: WP Downloader ${{ github.ref_name }}
           fail_on_unmatched_files: true
 
@@ -289,6 +289,6 @@ jobs:
             dist/WP_Downloader_Windows.zip
             Output/WP_Downloader_Setup.exe
             dist/WP_Environment_Checker.exe
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           name: WP Downloader ${{ github.ref_name }}
           fail_on_unmatched_files: true
