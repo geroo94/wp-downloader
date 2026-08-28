@@ -83,6 +83,46 @@ def _detect_js_runtime() -> dict:
 
 _AUDIO_EXTS = {".m4a", ".aac", ".opus", ".ogg", ".flac", ".mp3"}
 
+# ── Obejście HTTP 403 od YouTube ────────────────────────────────────────
+# YouTube wydaje URL-e mediów związane z konkretnym klientem odtwarzacza.
+# Gdy klient, który wygrał ekstrakcję, dostanie 403 na etapie POBIERANIA
+# (metadane schodzą się poprawnie, dopiero bajty są odrzucane — dokładnie ten
+# przypadek z logu Windows 2026-08-27), ten sam film bywa nadal dostępny
+# przez innego klienta.
+#
+# Kolejność NIE jest przypadkowa — wynika z pomiaru na feralnym filmie:
+#   default     → 137+140  (1080p AVC1)   ← dlatego zostaje domyślny
+#   android_vr  → 137+140  (1080p AVC1)
+#   mweb        → 18       (360p!)
+#   android     → 18       (360p!)
+#   web / ios / web_safari → BRAK formatów (SABR / PO-token)
+#   tv          → "The page needs to be reloaded"
+# Stąd: android_vr pierwszy (nie traci jakości), reszta jako ostatnia deska
+# ratunku — 360p jest lepsze niż nieudane pobieranie, ale nigdy nie może
+# wyprzedzić wariantu 1080p.
+_FALLBACK_PLAYER_CLIENTS: tuple[tuple[str, ...], ...] = (
+    ("android_vr",),
+    ("mweb",),
+    ("android",),
+    ("tv",),
+)
+
+
+def _is_http_403(msg: str) -> bool:
+    """Czy komunikat błędu yt-dlp to odrzucenie 403 (a nie inny błąd)?
+
+    yt-dlp opakowuje to w DownloadError z tekstem w stylu
+    "unable to download video data: HTTP Error 403: Forbidden"."""
+    low = (msg or "").lower()
+    return "403" in low and "forbidden" in low
+
+
+def _is_youtube_url(url: str) -> bool:
+    """Czy to link YouTube — jedyna platforma, dla której `player_client`
+    (a więc całe obejście 403) ma jakikolwiek sens."""
+    low = (url or "").lower()
+    return "youtube.com" in low or "youtu.be" in low
+
 
 def _cookies_opt(browser: str = "", file: str = "") -> dict:
     """yt-dlp opts dla źródła ciasteczek.
@@ -338,14 +378,69 @@ class YtDlpWorker:
         ydl_opts["verbose"] = True
 
         def run_download() -> None:
+            # Pierwsze podejście: BEZ wymuszania player_client. Domyślny wybór
+            # yt-dlp daje najlepszą jakość — zweryfikowane empirycznie na
+            # feralnym filmie z logu (default → 137+140 = 1080p AVC1).
+            # Wymuszanie klientów na sztywno byłoby regresją: ten sam film
+            # przez `mweb`/`android` zwraca WYŁĄCZNIE format 18 (360p),
+            # a przez `web`/`ios`/`web_safari` w ogóle nie ma formatów
+            # (SABR/PO-token). Dlatego klienty alternatywne wchodzą do gry
+            # dopiero jako REAKCJA na realne 403, nigdy profilaktycznie.
             try:
                 with YoutubeDL(ydl_opts) as ydl:
                     ydl.download([task.url])
+                return
             except yt_dlp.utils.DownloadCancelled:
-                pass
+                return
             except Exception as e:
-                error_holder.append(str(e))
-                logger.error("[yt-dlp] Download exception for %s: %s", task.url, e)
+                # Obejście dotyczy WYŁĄCZNIE YouTube: player_client to pojęcie
+                # ekstraktora YouTube, więc dla 403 z Vimeo/Facebooka retry
+                # byłby czterema gwarantowanymi porażkami (extractor_args
+                # no-op) i tylko opóźniałby komunikat o błędzie.
+                if not (_is_http_403(str(e)) and _is_youtube_url(task.url)):
+                    error_holder.append(str(e))
+                    logger.error("[yt-dlp] Download exception for %s: %s", task.url, e)
+                    return
+                logger.warning(
+                    "[yt-dlp] HTTP 403 dla %s — próbuję klientów zapasowych %s",
+                    task.url, [c[0] for c in _FALLBACK_PLAYER_CLIENTS])
+                # Trzymamy ORYGINALNY błąd 403 — to on jest diagnozą. Błędy
+                # z prób zapasowych bywają mylące (`tv` zwraca "The page needs
+                # to be reloaded"), więc nie mogą go nadpisać w UI.
+                original_err = str(e)
+
+            # 403 = YouTube odrzucił URL-e mediów wydane dla klienta, który
+            # wygrał ekstrakcję (typowo reputacja IP / PO-token). Ten sam film
+            # bywa nadal dostępny przez innego klienta, więc próbujemy po kolei,
+            # od najwyższej jakości (android_vr zwraca 1080p) w dół.
+            for clients in _FALLBACK_PLAYER_CLIENTS:
+                # Pliki cząstkowe z NIEUDANEJ próby nie mogą trafić do
+                # _merge_after_stop przy graceful stopie — każda próba pobiera
+                # inne itagi, więc lista musi startować pusta.
+                tracked_video.clear()
+                tracked_audio.clear()
+                retry_opts = dict(ydl_opts)
+                retry_opts["extractor_args"] = {
+                    **(ydl_opts.get("extractor_args") or {}),
+                    "youtube": {
+                        **((ydl_opts.get("extractor_args") or {}).get("youtube") or {}),
+                        "player_client": list(clients),
+                    },
+                }
+                try:
+                    with YoutubeDL(retry_opts) as ydl:
+                        ydl.download([task.url])
+                    logger.info("[yt-dlp] 403 obejście OK — klient %s", clients)
+                    return
+                except yt_dlp.utils.DownloadCancelled:
+                    return
+                except Exception as e2:
+                    logger.warning("[yt-dlp] klient %s nie pomógł: %s", clients, str(e2)[:200])
+
+            error_holder.append(original_err)
+            logger.error(
+                "[yt-dlp] Download exception for %s (403 utrzymuje się po %d próbach "
+                "zapasowych): %s", task.url, len(_FALLBACK_PLAYER_CLIENTS), original_err)
 
         await loop.run_in_executor(None, run_download)
 

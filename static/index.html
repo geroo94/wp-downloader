@@ -2541,14 +2541,18 @@
 
   // ── Pobieranie formatów ────────────────────────────────
   async function fetchFormats() {
-    const url = document.getElementById('url-input').value.trim();
+    const inp = document.getElementById('url-input');
+    const url = sanitizeUrl(inp.value);
     if (!url) { shakeInput(); return; }
+    if (url !== inp.value.trim()) inp.value = url;
     await _loadFormatsInto(url, 'fmt-select', false);
   }
 
   async function fetchStreamFormats() {
-    const url = document.getElementById('stream-url-input').value.trim();
+    const inp = document.getElementById('stream-url-input');
+    const url = sanitizeUrl(inp.value);
     if (!url) { showToast('Wklej link do streamu', true); return; }
+    if (url !== inp.value.trim()) inp.value = url;
     await _loadFormatsInto(url, 'stream-fmt-select', true);
   }
 
@@ -2646,7 +2650,12 @@
   // ── Dodanie zadania pobierania ─────────────────────────
   async function startDownload(isStream = false) {
     const urlInput = isStream ? document.getElementById('stream-url-input') : document.getElementById('url-input');
-    const url = urlInput.value.trim();
+    const url = sanitizeUrl(urlInput.value);
+    // Odbicie do pola: user widzi, co realnie poleci do pobierania.
+    if (url && url !== urlInput.value.trim()) {
+      urlInput.value = url;
+      showToast('Link oczyszczony (usunięto duplikat / parametry śledzące)');
+    }
     const format_id = isStream
       ? (document.getElementById('stream-fmt-select').value || 'best')
       : (document.getElementById('fmt-select').value || 'mp4-720');
@@ -3254,6 +3263,63 @@
     const inp = document.getElementById('url-input');
     inp.classList.add('error');
     setTimeout(() => inp.classList.remove('error'), 1500);
+  }
+
+  /** Bliźniak `url_utils.sanitize_url` z backendu — TRZYMAJ ZSYNCHRONIZOWANE.
+      Backend i tak sanityzuje ponownie (nie ufamy klientowi), ale robimy to
+      też tutaj, żeby user ZOBACZYŁ oczyszczony link w polu zanim kliknie
+      Pobierz — inaczej wygląda to jakby aplikacja po cichu zmieniła mu URL.
+
+      Bug źródłowy: podwójne Ctrl+V sklejało dwa linki bez separatora
+      (…watch?v=IDhttps://…watch?v=ID). Zachłanny regex /https?:\/\/[^\s]+/
+      tu nie wystarcza — połknąłby oba naraz, bo nie ma między nimi spacji.
+      Dlatego szukamy DRUGIEGO wystąpienia schematu i tam ucinamy. */
+  const _TRACKING_PARAMS = new Set([
+    'ab_channel', 'si', 'pp', 'feature', 'fbclid', 'gclid', 'igshid',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'
+  ]);
+
+  function sanitizeUrl(raw) {
+    if (!raw) return '';
+    const text = String(raw).trim();
+    const schemeRe = /https?:\/\//ig;
+    const first = schemeRe.exec(text);
+    if (!first) return text;   // brak http(s) — backend odrzuci z komunikatem
+
+    let url = text.slice(first.index).split(/\s/)[0];
+
+    // Cięcie doklejonego drugiego adresu — DWA sygnały, dokładnie jak
+    // url_utils._cut_repeated_paste w Pythonie:
+    //  1) dokładna powtórka -> zawsze tnij (łapie też link kończący się `/`),
+    //  2) inaczej tnij tylko, gdy przed schematem NIE stoi `= , | /`
+    //     (te znaczą URL osadzony w parametrze/ścieżce — cięcie by go zepsuło).
+    const rest = /https?:\/\//i.exec(url.slice(first[0].length));
+    if (rest) {
+      const cut = first[0].length + rest.index;
+      const head = url.slice(0, cut);
+      if (url.slice(cut).startsWith(head)) url = head;
+      else if (!'=,|/'.includes(url[cut - 1])) url = head;
+    }
+
+    // Parametry śledzące precz — surową operacją na tekście, BEZ `new URL()`.
+    // `new URL().toString()` normalizuje host (wielkość liter, :443, punycode)
+    // i re-koduje query, przez co wynik RÓŻNIŁBY SIĘ od backendu, a dla linków
+    // z podpisem (m3u8/direct) unieważniałby podpis. Musi zostać bajt w bajt
+    // zgodne z url_utils._strip_tracking_params.
+    const qIdx = url.indexOf('?');
+    if (qIdx !== -1) {
+      const head = url.slice(0, qIdx);
+      const afterQ = url.slice(qIdx + 1);
+      const hIdx = afterQ.indexOf('#');
+      const query = hIdx === -1 ? afterQ : afterQ.slice(0, hIdx);
+      const frag = hIdx === -1 ? '' : afterQ.slice(hIdx);
+      const parts = query.split('&').filter(p => p);
+      const kept = parts.filter(p => !_TRACKING_PARAMS.has(p.split('=')[0].toLowerCase()));
+      if (kept.length !== parts.length) {
+        url = head + (kept.length ? '?' + kept.join('&') : '') + frag;
+      }
+    }
+    return url;
   }
 
   const TOAST_ICONS = {

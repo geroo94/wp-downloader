@@ -40,6 +40,7 @@ from binaries import get_ffmpeg, get_ffprobe, subprocess_flags
 from cutter import CutterJob, CutterManager
 from download_manager import DownloadManager
 from environment_manager import collect_system_info
+from url_utils import sanitize_url
 import whisper_device
 from obs_controller import OBSController
 from streamlink_proxy import StreamlinkProxy
@@ -1799,15 +1800,21 @@ def create_app(manager: DownloadManager) -> FastAPI:
         Frontend wysyła JSON: {"url": "...", "format_id": "mp4-720"}
         My odpowiadamy: {"task_id": "abc123", "status": "queued"}
         """
-        if not req.url.startswith(("http://", "https://")):
+        # Sanityzacja PRZED walidacją: user potrafi wkleić link dwa razy
+        # (Ctrl+V ×2), przez co powstaje sklejony string, który przechodzi
+        # przez samo `startswith("http")` — patrz url_utils.sanitize_url.
+        url = sanitize_url(req.url)
+        if not url.startswith(("http://", "https://")):
             return JSONResponse(
                 {"error": "Nieprawidłowy URL. Musi zaczynać się od http:// lub https://"},
                 status_code=400
             )
+        if url != req.url:
+            logger.info("URL zsanityzowany: %r → %r", req.url, url)
 
         try:
             task_id = manager.add_task(
-                req.url,
+                url,
                 req.format_id,
                 req.quality,
                 output_path=req.output_path,
@@ -1820,7 +1827,7 @@ def create_app(manager: DownloadManager) -> FastAPI:
             logger.exception("Błąd tworzenia zadania pobierania: %s", exc)
             return JSONResponse({"error": str(exc)}, status_code=500)
 
-        logger.info("Dodano zadanie %s: %s [%s]", task_id, req.url, req.format_id)
+        logger.info("Dodano zadanie %s: %s [%s]", task_id, url, req.format_id)
         return JSONResponse({
             "task_id": task_id,
             "status": "queued",
@@ -1832,6 +1839,10 @@ def create_app(manager: DownloadManager) -> FastAPI:
         """Pobiera dostępne formaty dla podanego URL używając yt-dlp API."""
         from yt_dlp import YoutubeDL
         import yt_dlp.utils as _ydl_utils
+
+        # Ta sama sanityzacja co w /api/download — user klika "Sprawdź
+        # formaty" na tym samym, potencjalnie sklejonym linku.
+        url = sanitize_url(url)
 
         try:
             extra: dict = {}
