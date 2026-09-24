@@ -41,6 +41,8 @@ from cutter import CutterJob, CutterManager
 from download_manager import DownloadManager
 from environment_manager import collect_system_info
 from url_utils import sanitize_url
+import updater
+from updater import APP_VERSION
 import whisper_device
 from obs_controller import OBSController
 from streamlink_proxy import StreamlinkProxy
@@ -724,7 +726,9 @@ def create_app(manager: DownloadManager) -> FastAPI:
     @app.get("/api/system-info")
     async def system_info():
         """Wersje środowiska do paska statusu (dokumentacja: Python, yt-dlp, PHP)."""
-        info = collect_system_info(app_version="1.0")
+        # Wersja z updater.APP_VERSION (jedno źródło prawdy) — inaczej footer
+        # pokazywałby inną wersję niż ta, którą updater porównuje z GitHubem.
+        info = collect_system_info(app_version=APP_VERSION)
         info["obs_version"] = _obs.obs_version if _obs.connected else ""
         info["obs_connected"] = _obs.connected
         return JSONResponse(info)
@@ -1027,6 +1031,79 @@ def create_app(manager: DownloadManager) -> FastAPI:
         """Aktualizuje yt-dlp oraz inne biblioteki przez pip."""
         asyncio.create_task(perform_system_update(manager, delay=0))
         return JSONResponse({"ok": True, "message": "Rozpoczęto aktualizację wszystkich komponentów."})
+
+    # ── Aktualizacja SAMEJ APLIKACJI z GitHub Releases ──────────────────
+    # `/api/system/update` wyżej rusza tylko biblioteki pythonowe (pip).
+    # Poniższe trzy endpointy podmieniają aplikację: sprawdź → pobierz →
+    # zastosuj. Rozdzielone, bo pobranie to 500–700 MB i UI musi móc pokazać
+    # postęp oraz pozwolić użytkownikowi przerwać przed podmianą.
+
+    @app.get("/api/app-update/check")
+    async def app_update_check():
+        """Porównuje APP_VERSION z najnowszym tagiem wydania na GitHubie."""
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, updater.check_for_update)
+        return JSONResponse(result)
+
+    @app.post("/api/app-update/download")
+    async def app_update_download():
+        """Pobiera paczkę dla bieżącego systemu; postęp leci po WebSocket.
+
+        Pobieranie idzie w wątku roboczym (blokujące IO sieciowe), a postęp
+        jest rozgłaszany tym samym kanałem co postęp pobierania wideo, więc
+        frontend nie potrzebuje nowego transportu."""
+        info = await asyncio.get_event_loop().run_in_executor(
+            None, updater.check_for_update)
+        if info.get("error"):
+            return JSONResponse({"error": info["error"]}, status_code=502)
+        if not info.get("available"):
+            return JSONResponse({"error": "Aplikacja jest już aktualna"}, status_code=400)
+        asset = info.get("asset")
+        if not asset:
+            return JSONResponse(
+                {"error": "Wydanie nie zawiera paczki dla tego systemu"}, status_code=404)
+
+        dest = updater.staging_dir() / str(asset["name"])
+        loop = asyncio.get_event_loop()
+        last_pct = {"v": -1}
+
+        def _progress(done: int, total: int) -> None:
+            pct = int(done * 100 / total) if total else 0
+            # Rozgłaszamy co 1% — bez tego 700 MB generuje dziesiątki tysięcy
+            # broadcastów i zapycha WebSocket.
+            if pct != last_pct["v"]:
+                last_pct["v"] = pct
+                asyncio.run_coroutine_threadsafe(
+                    manager.broadcast({
+                        "type": "app_update_progress",
+                        "percent": pct,
+                        "downloaded": done,
+                        "total": total,
+                    }), loop)
+
+        try:
+            path = await loop.run_in_executor(
+                None, lambda: updater.download_asset(asset["url"], dest, _progress))
+        except Exception as e:
+            logger.exception("Pobieranie aktualizacji nie powiodło się")
+            return JSONResponse({"error": str(e)}, status_code=502)
+
+        return JSONResponse({"ok": True, "path": str(path), "name": asset["name"]})
+
+    class AppUpdateApplyRequest(BaseModel):
+        path: str
+
+    @app.post("/api/app-update/apply")
+    async def app_update_apply(req: AppUpdateApplyRequest):
+        """Podmienia zainstalowaną aplikację pobraną paczką i zwraca komendę
+        restartu (UI odpala ją przez mostek Qt i zamyka bieżący proces)."""
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: updater.apply_update(Path(req.path)))
+        if not result.get("ok"):
+            return JSONResponse({"error": result.get("error", "Nieznany błąd")},
+                                status_code=500)
+        return JSONResponse(result)
 
     @app.post("/api/system/clear-cache")
     async def clear_cache():

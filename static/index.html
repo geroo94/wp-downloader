@@ -1332,7 +1332,7 @@
     <span>v 1.0</span>
   </div>
   <div class="header-right">
-    <button type="button" class="btn-header-update" id="btn-github-update" onclick="updateFromGitHub()">
+    <button type="button" class="btn-header-update" id="btn-github-update" onclick="checkAppUpdate()">
       Aktualizuj z GitHub
     </button>
     <img class="header-logo" src="/static/wp_logo.png" alt="WP">
@@ -2278,6 +2278,33 @@
   <button class="btn-update-all" id="update-env-btn" onclick="updateEnvironment()">Aktualizuj komponenty</button>
 </footer>
 
+<!-- Modal aktualizacji aplikacji z GitHub Releases -->
+<div id="app-update-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;width:min(680px,94vw);max-height:86vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,0.35)">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0">
+      <span style="font-size:13px;font-weight:700;color:var(--text-1)" id="app-update-title">Aktualizacja aplikacji</span>
+      <button class="btn-about-link" onclick="closeAppUpdateModal()">✕ Zamknij</button>
+    </div>
+    <div style="padding:16px 20px;overflow-y:auto;flex:1">
+      <div id="app-update-summary" style="font-size:13px;color:var(--text-1);margin-bottom:10px"></div>
+      <div id="app-update-notes"
+           style="font-size:12px;line-height:1.6;color:var(--text-2);white-space:pre-wrap;
+                  background:var(--surf-subtle);border-radius:8px;padding:12px;max-height:38vh;overflow-y:auto"></div>
+      <div id="app-update-progress-wrap" style="display:none;margin-top:14px">
+        <div style="height:8px;background:var(--surf-subtle);border-radius:99px;overflow:hidden">
+          <div id="app-update-bar" style="height:100%;width:0%;background:var(--red);transition:width .2s"></div>
+        </div>
+        <div id="app-update-progress-label" style="font-size:11px;color:var(--text-3);margin-top:6px"></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--border);flex-shrink:0">
+      <button class="btn-secondary" onclick="openReleasePage()">Otwórz stronę wydania</button>
+      <button class="btn-secondary" onclick="closeAppUpdateModal()">Później</button>
+      <button class="btn-primary" id="app-update-go" onclick="startAppUpdate()">Pobierz i zaktualizuj</button>
+    </div>
+  </div>
+</div>
+
 <script>
   const tasks = {};
   const pendingStop = new Set();
@@ -2380,10 +2407,229 @@
         if (window.wpBridge.loadingProgress && typeof window.wpBridge.loadingProgress.connect === 'function') {
           window.wpBridge.loadingProgress.connect(_updateSplashProgress);
         }
+        // Drag & drop pliku: ścieżkę przechwytuje natywny filtr Qt, bo
+        // Chromium jej JS-owi nie udostępnia (patrz _DropForwarder
+        // w main_window.py). Bez tego dropzone'y musiały otwierać okno
+        // wyboru pliku — czyli dokładnie zgłaszany bug.
+        if (window.wpBridge.fileDropped && typeof window.wpBridge.fileDropped.connect === 'function') {
+          window.wpBridge.fileDropped.connect(handleNativeFileDrop);
+        }
       });
     }
     tick();
   })();
+
+  /** Rozszerzenia plików, które da się wczytać w danej zakładce. */
+  const _CUTTER_EXTS = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.m4v'];
+  const _TRANSCRIBE_EXTS = _CUTTER_EXTS.concat(['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg']);
+
+  function _extOf(p) {
+    const m = String(p || '').toLowerCase().match(/\.[a-z0-9]+$/);
+    return m ? m[0] : '';
+  }
+
+  /** Qt → JS: użytkownik upuścił plik na okno.
+
+      Ścieżka przychodzi z natywnego filtru zdarzeń, bo `drop` w Chromium
+      NIE niesie lokalnej ścieżki (zweryfikowane: File bez `.path`, puste
+      text/uri-list). Routing robimy tutaj, a nie po stronie Qt, żeby Qt nie
+      musiał nic wiedzieć o DOM-ie: o celu decyduje aktywna zakładka. */
+  function handleNativeFileDrop(path) {
+    if (!path) return;
+    // Podświetlenie zdejmujemy TUTAJ: zdarzenie `drop` konsumuje natywny filtr
+    // Qt, więc handlery dropzone'ów (które normalnie kasują klasę) już się nie
+    // odpalą i strefa zostałaby na czerwono do końca świata.
+    document.querySelectorAll('.cutter-dropzone.dragover')
+      .forEach(el => el.classList.remove('dragover'));
+    const dc = document.getElementById('drop-card');
+    if (dc) dc.classList.remove('drop-active');
+    const active = (document.querySelector('.tabs-nav .tab-btn.active') || {}).dataset;
+    const tab = active ? active.tab : '';
+    const ext = _extOf(path);
+    const name = String(path).split(/[\\/]/).pop();
+
+    if (tab === 'cutter') {
+      if (!_CUTTER_EXTS.includes(ext)) {
+        showToast('Fast Cutter przyjmuje pliki wideo (' + _CUTTER_EXTS.join(', ') + ')', true);
+        return;
+      }
+      cutterLoadFile(path, name);
+      showToast('Wczytano: ' + name);
+    } else if (tab === 'transkrypcja') {
+      if (!_TRANSCRIBE_EXTS.includes(ext)) {
+        showToast('Transkrypcja przyjmuje pliki audio/wideo', true);
+        return;
+      }
+      transcribeLoadFile(path);
+      showToast('Wczytano: ' + name);
+    } else {
+      showToast('Przeciągnij plik w zakładce Fast Cutter lub Transkrypcja');
+    }
+  }
+
+  /* Globalna zapora: plik upuszczony POZA dropzone'ami nie może zmusić
+     Chromium do nawigacji na file:// (widok aplikacji zniknąłby, zastąpiony
+     zawartością pliku). Zdarzenia z elementów docierają tu przez bubbling
+     JUŻ po ich własnych handlerach, więc drop-card z linkami działa dalej. */
+  ['dragover', 'drop'].forEach(ev => document.addEventListener(ev, e => {
+    const dt = e.dataTransfer;
+    const types = dt ? Array.from(dt.types || []) : [];
+    if (types.includes('Files')) { e.preventDefault(); return; }
+    // Tekst/URL upuszczony na TŁO też potrafi przenieść widok pod inny adres
+    // (aplikacja znika, zostaje treść linku). Blokujemy więc domyślną akcję
+    // wszędzie POZA polami edycyjnymi — wrzucenie linku do pola adresu ma
+    // dalej działać normalnie, tak samo jak karta z linkami (#drop-card,
+    // której własny handler odpala się wcześniej, w fazie bąbelkowania).
+    const t = e.target;
+    const editable = t && t.closest &&
+      t.closest('input, textarea, select, [contenteditable], [contenteditable="true"]');
+    if (!editable) e.preventDefault();
+  }));
+
+  /** Kopiowanie do schowka odporne na QWebEngineView.
+
+      Kolejność: natywny schowek Qt → Clipboard API → ukryta textarea +
+      execCommand. Natywny jest pierwszy, bo `navigator.clipboard.writeText`
+      w osadzonym Chromium potrafi cicho odrzucić Promise (brak focusu/
+      uprawnień), a przy wielkich transkrypcjach przerzucanie ogromnego
+      stringa przez most JS↔Chromium wywracało proces renderujący. */
+  async function copyTextSafe(text, okMsg) {
+    const s = String(text == null ? '' : text);
+    if (!s) return false;
+    // 1) Natywny schowek Qt — działa też dla wielomegabajtowych tekstów.
+    try {
+      if (window.wpBridge && typeof window.wpBridge.copy_to_clipboard === 'function') {
+        const ok = await window.wpBridge.copy_to_clipboard(s);
+        if (ok) { if (okMsg) showToast(okMsg); return true; }
+      }
+    } catch (e) { /* lecimy dalej do fallbacków */ }
+    // 2) Standardowe Clipboard API (dev w przeglądarce).
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(s);
+        if (okMsg) showToast(okMsg);
+        return true;
+      }
+    } catch (e) { /* lecimy do execCommand */ }
+    // 3) Ostatnia deska ratunku — ukryta textarea.
+    let ta = null;
+    try {
+      ta = document.createElement('textarea');
+      ta.value = s;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, s.length);
+      const ok = document.execCommand('copy');
+      if (ok) { if (okMsg) showToast(okMsg); return true; }
+      showToast('Nie udało się skopiować', true);
+      return false;
+    } catch (e) {
+      showToast('Nie udało się skopiować: ' + e.message, true);
+      return false;
+    } finally {
+      // Zawsze sprzątamy węzeł — inaczej każde kliknięcie zostawiałoby
+      // w DOM kopię całej transkrypcji (wyciek pamięci przy dużych tekstach).
+      if (ta && ta.parentNode) ta.parentNode.removeChild(ta);
+    }
+  }
+
+  /* ── Aktualizacja aplikacji z GitHub Releases ──────────────────────
+     `updateEnvironment()` niżej rusza tylko biblioteki pythonowe (pip).
+     Tu podmieniamy SAMĄ aplikację: sprawdź → pokaż release notes →
+     pobierz (500–700 MB, z paskiem postępu po WebSocket) → podmień.    */
+  let _appUpdateInfo = null;
+
+  function closeAppUpdateModal() {
+    document.getElementById('app-update-modal').style.display = 'none';
+  }
+
+  async function checkAppUpdate() {
+    // Przycisk żyje w nagłówku obok logo WP (#btn-github-update) — jeden
+    // punkt wejścia do aktualizacji, bez dubla w stopce.
+    const btn = document.getElementById('btn-github-update');
+    const prev = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Sprawdzam…'; }
+    try {
+      const r = await fetch('/api/app-update/check');
+      const d = await r.json();
+      if (d.error) { showToast(d.error, true); return; }
+      _appUpdateInfo = d;
+
+      if (!d.available) {
+        // Wymóg: czytelny komunikat, gdy nie ma czego aktualizować.
+        showToast('Aplikacja jest aktualna (wersja v' + d.current + ')');
+        return;
+      }
+      document.getElementById('app-update-title').textContent =
+        'Dostępna nowa wersja: ' + d.latest;
+      const sizeMb = d.asset ? (d.asset.size / 1048576).toFixed(0) + ' MB' : '—';
+      document.getElementById('app-update-summary').innerHTML =
+        'Masz <b>v' + d.current + '</b>, dostępna <b>' + d.latest + '</b>' +
+        (d.asset ? ' · paczka: ' + escHtml(d.asset.name) + ' (' + sizeMb + ')' : '');
+      document.getElementById('app-update-notes').textContent =
+        d.notes || '(brak opisu wydania)';
+      document.getElementById('app-update-progress-wrap').style.display = 'none';
+      document.getElementById('app-update-go').disabled = !d.asset;
+      document.getElementById('app-update-modal').style.display = 'flex';
+    } catch (e) {
+      showToast('Błąd sprawdzania aktualizacji: ' + e.message, true);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = prev; }
+    }
+  }
+
+  async function startAppUpdate() {
+    const go = document.getElementById('app-update-go');
+    go.disabled = true;
+    go.textContent = 'Pobieranie…';
+    document.getElementById('app-update-progress-wrap').style.display = '';
+    try {
+      const r = await fetch('/api/app-update/download', { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok || d.error) { showToast(d.error || 'Błąd pobierania', true); return; }
+
+      go.textContent = 'Instalowanie…';
+      document.getElementById('app-update-progress-label').textContent =
+        'Podmiana plików aplikacji…';
+      const r2 = await fetch('/api/app-update/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: d.path }),
+      });
+      const d2 = await r2.json();
+      if (!r2.ok || d2.error) { showToast(d2.error || 'Błąd instalacji', true); return; }
+
+      // Restart: komendę wykonuje Qt (odczepiony proces), bo zaraz potem
+      // zamykamy aplikację — w przeciwnym razie skrypt podmieniający pliki
+      // zginąłby razem z nami.
+      if (window.wpBridge?.run_detached && d2.restart_cmd) {
+        await window.wpBridge.run_detached(JSON.stringify(d2.restart_cmd));
+      }
+      // Świadomie bez słowa „zaktualizowano": na Windowsie pliki podmienia
+      // dopiero skrypt .bat po wyjściu z procesu.
+      showToast('Gotowe — aplikacja zamknie się i uruchomi w nowej wersji');
+      setTimeout(() => { if (window.wpBridge?.quit_app) window.wpBridge.quit_app(); }, 1200);
+    } catch (e) {
+      showToast('Błąd aktualizacji: ' + e.message, true);
+    } finally {
+      go.disabled = false;
+      go.textContent = 'Pobierz i zaktualizuj';
+    }
+  }
+
+  /** Postęp pobierania paczki — nadawany przez backend po WebSocket. */
+  function _onAppUpdateProgress(msg) {
+    const bar = document.getElementById('app-update-bar');
+    const lbl = document.getElementById('app-update-progress-label');
+    if (!bar || !lbl) return;
+    bar.style.width = (msg.percent || 0) + '%';
+    const mb = n => (n / 1048576).toFixed(0);
+    lbl.textContent = msg.total
+      ? `Pobrano ${mb(msg.downloaded)} / ${mb(msg.total)} MB (${msg.percent}%)`
+      : `Pobrano ${mb(msg.downloaded)} MB`;
+  }
 
   async function updateEnvironment() {
     const btn = document.getElementById('update-env-btn');
@@ -2435,19 +2681,20 @@
   }
 
   /** Otwiera przeglądarkę na stronie GitHub, gdzie użytkownik może pobrać nową wersję. */
-  function updateFromGitHub() {
-    const btn = document.getElementById('btn-github-update');
-    if (btn) btn.disabled = true;
-    
-    // Otwórz przeglądarkę na stronie releases Twojego repozytorium
-    // Używamy window.wpBridge.open_external_link, aby otworzyć link w domyślnej przeglądarce systemowej
+  /** Awaryjne wyjście: otwarcie strony wydania w przeglądarce.
+
+      Zostaje po dawnej obsłudze przycisku „Aktualizuj z GitHub" (która TYLKO
+      to robiła). Przydaje się, gdy automatyczna podmiana nie wchodzi w grę —
+      np. w trybie deweloperskim albo przy braku praw zapisu do katalogu
+      aplikacji — więc wisi w modalu obok „Później". */
+  function openReleasePage() {
+    const url = 'https://github.com/geroo94/wp-downloader/releases';
     if (window.wpBridge && typeof window.wpBridge.open_external_link === 'function') {
-      window.wpBridge.open_external_link('https://github.com/geroo94/wp-downloader/releases');
-      showToast('Otwieram stronę GitHub w przeglądarce. Pobierz najnowszą wersję i zastąp nią obecną aplikację.');
+      window.wpBridge.open_external_link(url);
+      showToast('Otwieram stronę wydań w przeglądarce');
     } else {
-      showToast('Nie można otworzyć przeglądarki. Odwiedź https://github.com/geroo94/wp-downloader/releases', true);
+      showToast('Odwiedź ' + url, true);
     }
-    setTimeout(() => { if (btn) btn.disabled = false; }, 5000); // Odblokuj przycisk po 5 sekundach
   }
   loadSystemFooter();
   setInterval(loadSystemFooter, 60000);
@@ -2525,6 +2772,8 @@
         }
       } else if (data.type === 'system_info_refresh') {
         loadSystemFooter();
+      } else if (data.type === 'app_update_progress') {
+        _onAppUpdateProgress(data);
       } else if (data.type === 'task_removed') {
         delete tasks[data.task_id];
         renderTasks();
@@ -3440,32 +3689,13 @@
     }
   }
 
-  function copyLogs() {
+  async function copyLogs() {
     const ta = document.getElementById('log-content');
-    const text = ta.value;
-    // Fallback do zaznaczenia + execCommand('copy'): w QWebEngineView (Qt)
-    // navigator.clipboard.writeText potrafi cicho odrzucić Promise (brak
-    // uprawnień/focusu w embedded webview) — bez .catch tu nic się wtedy
-    // nie działo, przycisk "Kopiuj" wyglądał na martwy.
-    const fallbackCopy = () => {
-      try {
-        ta.focus();
-        ta.select();
-        ta.setSelectionRange(0, text.length);
-        if (document.execCommand('copy')) showToast('Skopiowano logi!');
-        else showToast('Nie udało się skopiować logów', true);
-      } catch {
-        showToast('Nie udało się skopiować logów', true);
-      }
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(
-        () => showToast('Skopiowano logi!'),
-        fallbackCopy,
-      );
-    } else {
-      fallbackCopy();
-    }
+    // Wspólny tor kopiowania (natywny schowek Qt → Clipboard API →
+    // execCommand). Wcześniej ta funkcja miała własny, lokalny fallback;
+    // logi bywają równie duże co transkrypcje, więc korzysta z tej samej
+    // ścieżki natywnej, która nie przerzuca tekstu przez most Chromium.
+    await copyTextSafe(ta ? ta.value : '', 'Skopiowano logi!');
   }
 
   async function openLogFile() {
@@ -3707,9 +3937,11 @@
     showToast('Serwer proxy zatrzymany');
   }
 
-  function copyProxyUrl() {
+  async function copyProxyUrl() {
     const url = document.getElementById('proxy-url-display').textContent;
-    navigator.clipboard.writeText(url).then(() => showToast('Skopiowano adres proxy!'));
+    // Ten sam bezpieczny tor co transkrypcja — bez .catch() przycisk
+    // milczał, gdy Clipboard API odrzuciło Promise w QWebEngineView.
+    await copyTextSafe(url, 'Skopiowano adres proxy!');
   }
 
   function _startProxyPoll() {
@@ -4740,17 +4972,22 @@
         inp.click();
       }
     });
-    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
-    dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
-    dz.addEventListener('drop', async e => {
-      e.preventDefault();
+    // Pełny komplet zdarzeń z preventDefault+stopPropagation: bez tego
+    // Chromium traktuje upuszczony plik jako nawigację do file:// i podmienia
+    // widok aplikacji na zawartość pliku.
+    ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover');
+    }));
+    ['dragleave', 'dragend'].forEach(ev => dz.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover');
+    }));
+    dz.addEventListener('drop', e => {
+      e.preventDefault(); e.stopPropagation();
       dz.classList.remove('dragover');
-      // QtWebEngine drop zdarzenie NIE udostępnia local file path dla security.
-      // Otwórz Qt file dialog żeby pobrać właściwą ścieżkę.
-      if (window.wpBridge?.pick_open_file) {
-        const p = await window.wpBridge.pick_open_file('', 'Wideo (*.mp4 *.mkv *.webm *.mov);;Wszystkie pliki (*)');
-        if (p) cutterLoadFile(p, p.split(/[\\/]/).pop());
-      }
+      // Samą ścieżkę dostarcza natywny filtr Qt przez wpBridge.fileDropped
+      // (patrz handleNativeFileDrop) — Chromium jej tu nie ma. Wcześniej
+      // otwieraliśmy w tym miejscu okno wyboru pliku, co użytkownik widział
+      // jako „przeciąganie otwiera eksplorator".
     });
     ['cutter-logo-src', 'cutter-src-text', 'cutter-outro-src'].forEach(id => {
       document.getElementById(id).addEventListener('input', refreshCutterHint);
@@ -5252,12 +5489,13 @@
     }
   }
 
-  function transcribeCopyToClipboard() {
+  async function transcribeCopyToClipboard() {
     const ta = document.getElementById('transcribe-result');
-    if (!ta.value) return;
-    navigator.clipboard.writeText(ta.value)
-      .then(() => showToast('Skopiowano do schowka'))
-      .catch(() => showToast('Nie udało się skopiować', true));
+    if (!ta || !ta.value) return;
+    // copyTextSafe → natywny schowek Qt; bezpośrednie
+    // navigator.clipboard.writeText() na długiej transkrypcji potrafiło
+    // ubić proces renderujący (RenderProcessTerminated).
+    await copyTextSafe(ta.value, 'Skopiowano do schowka');
   }
 
   async function transcribeSaveAs(ext) {
@@ -5298,15 +5536,17 @@
         inp.click();
       }
     });
-    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
-    dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
-    dz.addEventListener('drop', async e => {
-      e.preventDefault();
+    // Jak w Fast Cutterze: komplet zdarzeń + preventDefault/stopPropagation,
+    // a ścieżka przychodzi natywnie przez wpBridge.fileDropped.
+    ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover');
+    }));
+    ['dragleave', 'dragend'].forEach(ev => dz.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover');
+    }));
+    dz.addEventListener('drop', e => {
+      e.preventDefault(); e.stopPropagation();
       dz.classList.remove('dragover');
-      if (window.wpBridge?.pick_open_file) {
-        const p = await window.wpBridge.pick_open_file('', FILTER);
-        if (p) transcribeLoadFile(p);
-      }
     });
   })();
 </script>

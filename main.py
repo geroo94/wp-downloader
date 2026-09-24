@@ -262,6 +262,15 @@ if __name__ == "__main__":
         except Exception as _exc:
             logging.warning("prepend_bin_to_path failed: %s", _exc)
 
+        # Sprzątanie po ewentualnej aktualizacji: normalnie kasuje to skrypt
+        # restartu, ale gdy ktoś go ubije, obok aplikacji zostaje *.app.old
+        # (~700 MB). Tanie i całkowicie opcjonalne — stąd try/except.
+        try:
+            from updater import cleanup_stale_updates
+            cleanup_stale_updates()
+        except Exception as _exc:
+            logging.warning("cleanup_stale_updates failed: %s", _exc)
+
         # Single-instance guard: prevents the WebView from staring at a dead port
         # when the user double-clicks the EXE during the FFmpeg download window.
         _instance_status = acquire_single_instance_lock()

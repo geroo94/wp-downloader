@@ -2,6 +2,12 @@
 
 Aplikacja desktopowa (macOS/Windows) do pobierania i obróbki wideo: pobieranie z yt-dlp, Live Stream DVR, Fast Cutter z brandingiem WP, oraz transkrypcja Whisper AI z akceleracją sprzętową.
 
+## ✨ Co nowego w tym wydaniu
+
+- **Aktualizacja z GitHub w jednym kliknięciu** — przycisk „Aktualizuj z GitHub" w prawym górnym rogu sprawdza najnowsze wydanie, pokazuje opis zmian i pobiera właściwą paczkę dla Twojego systemu, po czym podmienia aplikację i uruchamia ją ponownie. Gdy masz już najnowszą wersję, dostajesz krótkie potwierdzenie zamiast okna.
+- **Przeciąganie plików działa w Fast Cutterze i Transkrypcji** — upuszczenie wideo na strefę wczytuje je od razu, zamiast otwierać okno wyboru pliku.
+- **Kopiowanie transkrypcji bez zawieszania aplikacji** — przyciski „Kopiuj tekst" i „Kopiuj SRT" korzystają z systemowego schowka, więc radzą sobie także z wielogodzinnymi transkrypcjami.
+
 ## 🚀 Przegląd i główne funkcje
 
 - **Pobieranie wideo** — silnik yt-dlp in-process (bez zależności od systemowego Pythona), automatyczny merge audio/wideo, historia pobrań z podglądem postępu na żywo.
