@@ -108,7 +108,9 @@ def _check_ytdlp_update(progress: LoadingProgress) -> None:
     try:
         import json
         import urllib.request
-        with urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=4) as r:
+        from ssl_ctx import secure_ssl_context
+        with urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=4,
+                                    context=secure_ssl_context()) as r:
             latest = json.load(r).get("info", {}).get("version", "") or ""
     except Exception as exc:
         logger.debug("Health-check yt-dlp: PyPI check pominięty (offline?): %s", exc)

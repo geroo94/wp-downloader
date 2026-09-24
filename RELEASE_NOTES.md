@@ -6,6 +6,7 @@ Aplikacja desktopowa (macOS/Windows) do pobierania i obróbki wideo: pobieranie 
 
 - **Aktualizacja z GitHub w jednym kliknięciu** — przycisk „Aktualizuj z GitHub" w prawym górnym rogu sprawdza najnowsze wydanie, pokazuje opis zmian i pobiera właściwą paczkę dla Twojego systemu, po czym podmienia aplikację i uruchamia ją ponownie. Gdy masz już najnowszą wersję, dostajesz krótkie potwierdzenie zamiast okna.
 - **Przeciąganie plików działa w Fast Cutterze i Transkrypcji** — upuszczenie wideo na strefę wczytuje je od razu, zamiast otwierać okno wyboru pliku.
+- **Naprawione sprawdzanie aktualizacji na macOS** — w spakowanej wersji przycisk „Aktualizuj z GitHub" kończył się błędem weryfikacji certyfikatu (`CERTIFICATE_VERIFY_FAILED`), bo aplikacja nie widziała systemowego magazynu certyfikatów. Teraz nosi własny, więc działa też na maszynach, gdzie tego magazynu brakuje.
 - **Kopiowanie transkrypcji bez zawieszania aplikacji** — przyciski „Kopiuj tekst" i „Kopiuj SRT" korzystają z systemowego schowka, więc radzą sobie także z wielogodzinnymi transkrypcjami.
 
 ## 🚀 Przegląd i główne funkcje

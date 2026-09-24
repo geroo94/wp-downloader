@@ -32,6 +32,8 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ssl_ctx import is_certificate_error, secure_ssl_context
+
 logger = logging.getLogger(__name__)
 
 # Jedno źródło prawdy o wersji aplikacji. `environment_manager.collect_system_info`
@@ -128,7 +130,10 @@ def fetch_latest_release(timeout: float = 15.0) -> dict[str, Any]:
     Bez tokenu — publiczne repo, limit 60 zapytań/h na IP w zupełności
     wystarcza do ręcznego „Sprawdź aktualizacje"."""
     req = urllib.request.Request(RELEASES_LATEST_URL, headers=_UA)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    # context: w zamrożonej aplikacji domyślny magazyn CA bywa pusty — patrz
+    # ssl_ctx.secure_ssl_context (to jest fix na CERTIFICATE_VERIFY_FAILED).
+    with urllib.request.urlopen(req, timeout=timeout,
+                                context=secure_ssl_context()) as resp:
         return json.load(resp)
 
 
@@ -157,8 +162,18 @@ def check_for_update(local_version: str = APP_VERSION) -> dict[str, Any]:
             else f"GitHub API zwróciło HTTP {e.code}"
         )
         return out
-    except Exception as e:  # sieć/DNS/timeout
-        out["error"] = f"Brak połączenia z GitHub: {e}"
+    except Exception as e:  # sieć/DNS/timeout/TLS
+        if is_certificate_error(e):
+            # Osobny komunikat, bo gołe „CERTIFICATE_VERIFY_FAILED" nie mówi
+            # użytkownikowi, co ma z tym zrobić.
+            out["error"] = (
+                "Nie udało się zweryfikować certyfikatu GitHuba. Sprawdź datę "
+                "systemową oraz ustawienia sieci firmowej (proxy podmieniające "
+                "certyfikaty). Wydanie można pobrać ręcznie przyciskiem "
+                "„Otwórz stronę wydania”."
+            )
+        else:
+            out["error"] = f"Brak połączenia z GitHub: {e}"
         return out
 
     tag = str(rel.get("tag_name") or "")
@@ -196,7 +211,8 @@ def download_asset(
     part = dest.with_suffix(dest.suffix + ".part")
 
     req = urllib.request.Request(url, headers=_UA)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout,
+                                context=secure_ssl_context()) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         with open(part, "wb") as f:

@@ -44,6 +44,7 @@ import os
 import platform
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -449,9 +450,44 @@ def build_report_text(results: list[CheckResult]) -> str:
 #     podnosimy uprawnienia. Sam PRZEBIEG instalatora jest cichy (/quiet),
 #     ale zgoda na elevację jest zawsze widoczna i wymaga akcji usera.
 
+_SSL_CTX: "ssl.SSLContext | None" = None
+
+
+def _ssl_context() -> "ssl.SSLContext":
+    """Kontekst TLS działający też w spakowanej aplikacji.
+
+    Ten sam problem, co w głównej aplikacji (patrz `ssl_ctx.py`): PyInstaller
+    nie wnosi magazynu CA systemu, więc na maszynie bez `/etc/ssl/cert.pem`
+    domyślny kontekst ma ZERO certyfikatów i każde `https://` kończy się
+    `CERTIFICATE_VERIFY_FAILED`. Checker jest celowo bez zależności (sam
+    stdlib), więc nie importuje modułu aplikacji — certifi bierzemy, jeśli
+    akurat jest, a jak nie ma, zostaje magazyn systemowy.
+
+    Weryfikacji NIE wyłączamy: tym kanałem lecą instalatory komponentów
+    systemowych, które potem uruchamiamy (część z elevacją).
+    """
+    global _SSL_CTX
+    if _SSL_CTX is None:
+        cafile = None
+        try:
+            import certifi
+            _where = certifi.where()
+            if _where and os.path.isfile(_where):
+                cafile = _where
+        except Exception:
+            pass
+        try:
+            _SSL_CTX = (ssl.create_default_context(cafile=cafile) if cafile
+                        else ssl.create_default_context())
+        except Exception:
+            _SSL_CTX = ssl.create_default_context()
+    return _SSL_CTX
+
+
 def _download_to(url: str, dest_path: str, timeout: float = 120.0) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": "WP-Environment-Checker/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest_path, "wb") as f:
+    with urllib.request.urlopen(req, timeout=timeout,
+                                context=_ssl_context()) as resp, open(dest_path, "wb") as f:
         shutil.copyfileobj(resp, f)
 
 
@@ -598,7 +634,8 @@ def _latest_node_lts_msi_url() -> str | None:
         req = urllib.request.Request(
             "https://nodejs.org/dist/index.json",
             headers={"User-Agent": "WP-Environment-Checker/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15,
+                                    context=_ssl_context()) as resp:
             releases = json.load(resp)
         for rel in releases:
             if rel.get("lts"):

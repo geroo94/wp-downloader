@@ -59,6 +59,12 @@ else:
 
 binaries = []
 hiddenimports = ['uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.asyncio', 'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on', 'PyQt6.QtWebEngineCore']
+# certifi JAWNIE: bez `cacert.pem` w bundlu zamrożona aplikacja nie ma żadnego
+# magazynu CA i każde https:// kończy się CERTIFICATE_VERIFY_FAILED (updater,
+# sprawdzanie wersji komponentów). Dotąd wnosił to hook PyInstallera — trzymamy
+# to wprost, żeby zmiana hooka nie wysadziła po cichu aktualizacji.
+tmp_ret = collect_all('certifi')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('fastapi')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('uvicorn')

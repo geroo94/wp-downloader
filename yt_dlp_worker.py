@@ -785,7 +785,9 @@ class YtDlpWorker:
                     url,
                     headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
                 )
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                from ssl_ctx import secure_ssl_context
+                with urllib.request.urlopen(req, timeout=10,
+                                            context=secure_ssl_context()) as resp:
                     return resp.url
             except Exception:
                 return url

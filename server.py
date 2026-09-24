@@ -40,6 +40,7 @@ from binaries import get_ffmpeg, get_ffprobe, subprocess_flags
 from cutter import CutterJob, CutterManager
 from download_manager import DownloadManager
 from environment_manager import collect_system_info
+from ssl_ctx import secure_ssl_context
 from url_utils import sanitize_url
 import updater
 from updater import APP_VERSION
@@ -94,7 +95,8 @@ async def _pypi_latest(pkg: str) -> str:
     import urllib.request, json as _json
     def _fetch() -> str:
         try:
-            with urllib.request.urlopen(f"https://pypi.org/pypi/{pkg}/json", timeout=8) as r:
+            with urllib.request.urlopen(f"https://pypi.org/pypi/{pkg}/json", timeout=8,
+                                        context=secure_ssl_context()) as r:
                 return _json.load(r).get("info", {}).get("version", "") or ""
         except Exception:
             return ""
@@ -454,7 +456,8 @@ def _fetch_m3u8_from_page(url: str) -> list[dict]:
     }
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15,
+                                    context=secure_ssl_context()) as resp:
             html = resp.read(5 * 1024 * 1024).decode("utf-8", errors="replace")
     except Exception as exc:
         logger.warning("m3u8 fetch error for %s: %s", url, exc)

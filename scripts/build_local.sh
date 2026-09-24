@@ -94,7 +94,14 @@ esac
 
 echo ""
 echo "=== 3. Clean dist/ + build/ ==="
-rm -rf dist/ build/
+# Finder potrafi odtworzyć .DS_Store w katalogu, który właśnie kasujemy —
+# `rm -rf` usuwa wtedy zawartość, po czym wywala się na „Directory not empty"
+# przy samym katalogu i cały build pada. Stąd drugie podejście.
+for _d in dist build; do
+    [ -e "$_d" ] || continue
+    rm -rf "$_d" 2>/dev/null || true
+    rm -rf "$_d"
+done
 git restore build/  # przywróć entitlements.plist + installer.iss (tracked)
 
 echo ""
